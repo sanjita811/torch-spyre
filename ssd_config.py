@@ -34,6 +34,25 @@ import math
 FP16_EXP_MAX = 11.0
 INTRA_FACTORED_TOTAL_LIMIT = 2.0 * (FP16_EXP_MAX - 1.0)   # ≈ 20.0 (with margin)
 
+# HARD scan-span constraint (measured on merged main f4fab17, 2026-07-31). The
+# dense O(C²) inter-chunk scan materializes a coarse-tile read-copy whose per-core
+# span scales with the (C+1) row dim, which the work-division pass cannot split
+# below the AIU hardware limit (MAX_SPAN = 65535·4096 = 256 MiB, see
+# work_division.py). Measured envelope at N=128 (NP=8192): C≤64 compiles; C≥128
+# ALWAYS fails ("per-core tensor span … exceeds hardware limit" / dxp SIGABRT /
+# HBM pool OOM). Verified: T4096/L64/C64 ✓, T8192/L128/C64 ✓, T16384/L256/C64 ✓
+# vs T8192/L64/C128 ✗, T16384/L64/C256 ✗ (16.5GB), T16384/L128/C128 ✗ (344MB span).
+# So pick_config MUST keep C = T/L ≤ this until a sub-quadratic (hierarchical)
+# scan lands. BACKEND ASK: split the scan's (C+1) row dim in work-division, or
+# tile the scan matmul, to lift this cap without a kernel-side blocked scan.
+MAX_FLAT_SCAN_CHUNKS = 64
+
+# Largest chunk length L whose intra-chunk (BH,C,L,L) attn intermediate still fits
+# the per-core span limit. Measured: L=256/C=64 compiles (attn≈268MB but splittable
+# on C/BH, unlike the scan's C+1 dim); L≥512 (T≥32768 at C≤64) pushes attn past ~1GB
+# and no split keeps it legal. So L>256 with a FLAT scan can't compile → hierarchical.
+MAX_INTRA_L = 256
+
 
 def _l_star(T, N, P):
     """Compute-optimal chunk size (continuous): minimizes a·L + b/L²."""
@@ -114,25 +133,49 @@ def pick_config(B, T, H, P, N, mean_abs_a=0.06, C_hier_threshold=None):
     """
     n_bh = B * (H // P)
     L = _snap_L(_l_star(T, N, P), T)
-    # fp16 guard: if the factored path would overflow at this L, cap L to the
-    # largest 64-multiple that stays safe; if even L=64 is unsafe, keep L=64 and
-    # switch to the masked fallback (bounded, always correct).
+
+    # HARD scan-span constraint: the flat dense scan requires C = T/L ≤
+    # MAX_FLAT_SCAN_CHUNKS or it fails to compile (see the constant's note). The
+    # compute-optimal L* often violates this at long T (e.g. T=16384 → L*≈112 →
+    # L=128 → C=128 ✗). Raise L to the smallest 64-multiple that keeps C ≤ cap.
+    # This DOMINATES the L* preference — a slower-but-compiling L beats an OOM.
+    L_scan_min = ((T // MAX_FLAT_SCAN_CHUNKS) + 63) // 64 * 64      # smallest L s.t. C≤cap
+    if L < L_scan_min:
+        L = L_scan_min if T % L_scan_min == 0 else _snap_L(float(L_scan_min), T)
+
+    # fp16 guard: the factored intra path peaks at exp(|total|/2)≈exp(mean·L/2) and
+    # overflows past INTRA_FACTORED_TOTAL_LIMIT. Below the scan-imposed L we could
+    # cap L for safety; but when the scan constraint FORCES a large L we can't lower
+    # it, so switch to the unconditionally-safe masked intra path instead.
     intra = "factored"
     limit_L = int(INTRA_FACTORED_TOTAL_LIMIT / max(mean_abs_a, 1e-6))
     if L > limit_L:
         capped = _snap_L(float(limit_L), T)
-        if capped >= 64 and mean_abs_a * capped < INTRA_FACTORED_TOTAL_LIMIT:
-            L = capped
+        if capped >= L_scan_min and mean_abs_a * capped < INTRA_FACTORED_TOTAL_LIMIT:
+            L = capped                      # lowering L stays scan-legal → keep factored
         else:
-            L = 64
-            intra = "masked"
+            intra = "masked"                # forced large L (scan) → bounded masked path
     C = T // L
-    # Hierarchical scan disabled by default (backend-blocked on device); only when
-    # a threshold is explicitly passed (CPU experiments / future backend support).
-    scan_mode = "hierarchical" if (C_hier_threshold is not None and C > C_hier_threshold) else "flat"
+
+    # Hierarchical (sub-quadratic) scan: needed only when NO single L satisfies both
+    # constraints at once — i.e. keeping C≤cap needs an L so large the intra L×L attn
+    # itself overflows the span limit (measured: L≥512 → attn≥1GB). That happens at
+    # T≥~32768. There the flat scan can't be made legal by L alone; the blocked scan
+    # (small L for cheap attn + block the C dim so the scan never materializes C+1)
+    # is the only path. Its 4D block matmul now compiles on merged main (probe:
+    # rel 1.7e-3), unlike the pre-merge "can't restickify" block. Auto-select when C
+    # would still exceed the cap after the intra-attn L ceiling, or when a threshold
+    # is passed explicitly (CPU experiments).
+    # The intra L×L attn intermediate (BH,C,L,L) grows as L²; past L≈256 it nears
+    # the same 256 MiB per-core span limit. So when the scan constraint forces
+    # L > MAX_INTRA_L, neither flat-scan L choice is legal (small L → C≥128 scan
+    # OOM; large L → attn OOM) and only the blocked scan works.
+    auto_hier = (C > MAX_FLAT_SCAN_CHUNKS) or (L > MAX_INTRA_L)
+    scan_mode = "hierarchical" if (auto_hier or (
+        C_hier_threshold is not None and C > C_hier_threshold)) else "flat"
     block_K = _pick_block_K(C) if scan_mode == "hierarchical" else 0
     # If no clean 64-aligned block size exists, hierarchical can't be stick-safe;
-    # fall back to flat (still correct, just O(C²)).
+    # fall back to flat (still correct, just O(C²) — and may not compile at C≥128).
     if scan_mode == "hierarchical" and block_K == 0:
         scan_mode = "flat"
     return SSDConfig(L=L, bh_tiles=_bh_tiles_for(n_bh, L),
