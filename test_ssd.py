@@ -130,11 +130,14 @@ def build_decay_matrix(decay_before, decay_cumsum, final_arg, strict_mask):
 
 
 def build_intra_decay(g_row, g_col, causal_mask):
-    """(BH,C,L,L) bounded intra-chunk decay mask (FALLBACK path). g_row/g_col are
-    PRE-EXPANDED to (BH,C,L,La) by the caller (no in-kernel broadcast — see
-    _build_intra_decay); this is a plain elementwise diff. clamp(max=0) keeps
-    weights in (0,1] → unconditionally fp16-safe at any L."""
-    outer = g_row - g_col                                 # (BH, C, L, La)
+    """(BH,C,L,L) bounded intra-chunk decay mask (FALLBACK path). ASYMMETRIC layout:
+    ``g_row`` is PRE-EXPANDED to (BH,C,L,La) on host but ``g_col`` stays (BH,C,La)
+    and is broadcast in-kernel via ``unsqueeze(-2)``. Verified on device at L=256
+    (rel 1.3e-3) — the in-kernel broadcast is layout-feasible on the COLUMN side
+    (off the last stick dim) even though the full self-outer-difference is not.
+    Halves the host pre-expand transfer vs expanding both (134MB not 268MB @L256).
+    clamp(max=0) keeps weights in (0,1] → unconditionally fp16-safe at any L."""
+    outer = g_row - g_col.unsqueeze(-2)                   # (BH,C,L,La) - (BH,C,1,La)
     return torch.exp(torch.clamp(outer, max=0.0)) * causal_mask
 
 
@@ -399,8 +402,16 @@ def _build_intra_decay(a_flat, chunk_len, n_bh, n_chunks):
     (bounded, and only on the masked fallback path). See ssd_design.md#precision.
     """
     g = a_flat.float().cumsum(-1)                                      # (BH,C,L)
+    # ASYMMETRIC: pre-expand only the ROW operand (134MB @L256); the COLUMN stays
+    # (BH,C,La) and broadcasts in-kernel via unsqueeze(-2). Verified feasible+correct
+    # on device at L=256 (probe_outerdiff.py expand_row: rel 1.3e-3), whereas the
+    # single-g self-outer-difference is still backend-blocked ("no mechanism to
+    # resolve stick incompatibility") and the BH-stick layout silently mis-builds
+    # (rel 0.61). BACKEND ASK: support the in-kernel self-outer-difference
+    # v[...,:,None]-v[...,None,:] at L>64 so BOTH operands can stay (BH,C,L) (would
+    # drop the remaining 134MB host pre-expand to a ~0.5MB g vector).
     g_row = g.unsqueeze(-1).expand(n_bh, n_chunks, chunk_len, chunk_len).contiguous().half()
-    g_col = g.unsqueeze(-2).expand(n_bh, n_chunks, chunk_len, chunk_len).contiguous().half()
+    g_col = g.half()                                                   # (BH,C,La), no expand
     causal = _device_const(
         f"causal_intra_{chunk_len}",
         lambda: torch.tril(torch.ones(chunk_len, chunk_len, dtype=torch.float16)),
@@ -408,7 +419,7 @@ def _build_intra_decay(a_flat, chunk_len, n_bh, n_chunks):
     g_row_d, g_col_d = g_row.to("spyre"), g_col.to("spyre")
     _declare_dims(n_chunks, chunk_len)
     name_tensor_dims(g_row_d, ["BH", "C", "L", "La"])
-    name_tensor_dims(g_col_d, ["BH", "C", "L", "La"])
+    name_tensor_dims(g_col_d, ["BH", "C", "La"])
     return torch.compile(build_intra_decay, dynamic=False)(g_row_d, g_col_d, causal)
 
 
