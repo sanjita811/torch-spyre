@@ -37,7 +37,21 @@ except (ImportError, ModuleNotFoundError):
 
 # ============================ config (Mamba-2 names) ====================
 # B=batch T=seqlen H=dim P=headdim nheads=H//P N=d_state L=chunk C=T//L G=ngroups.
-B, T, H, P, N, L = 2, 4096, 2048, 64, 128, 256
+# L is the chunk size. On Spyre the optimum is SMALL (opposite of GPU Mamba's 256):
+# the kernel is ~280x memory-bound, so the O(L²) intra-chunk attn intermediate — not
+# the O(C²) scan — dominates once C is small. Measured device wall-clock (isolated
+# bench, 2026-08-01, merged main f4fab17), B2/T4096/N128:
+#   L=64/C=64  = 928ms (Y 0.0039)   <-- optimum for T=4096
+#   L=128/C=32 = 1777ms (Y 0.0045)
+#   L=256/C=16 = 4402ms (Y 0.0057)
+# So default L=64 here. At LONG T the picture flips via a CORRECTNESS+compile wall,
+# not speed: T=16384 needs C≤64 (T16384/L64/C256 => Y=0.59 GARBAGE, dense-scan fp16
+# saturation; T16384/L128/C128 => dxp SIGABRT "immediate out of boundary"; only
+# T16384/L256/C64 => Y=0.0057 compiles+correct). pick_config (ssd_config.py) encodes
+# exactly this — grow L just enough to keep C≤MAX_FLAT_SCAN_CHUNKS(=64). All its
+# picks were re-validated against these device measurements. Use pick_config for any
+# non-default shape (see validate_long_t); the hardcoded L below is only the T=4096 demo.
+B, T, H, P, N, L = 2, 4096, 2048, 64, 128, 64
 nheads = H // P
 G = 1                                
 C = T // L
@@ -171,6 +185,16 @@ def fused_kernel(a, cumsum_tri, c_proj, b_proj, causal_mask, x, decay_matrix,
         chunk_states = torch.matmul(b_scaled_t, x_c) * torch.exp(0.5 * total).unsqueeze(-1)
 
         # --- inter-chunk scan (dense O(C²) matmul) ---
+        # BACKEND-BLOCKED at the sub-quadratic alternative: a hierarchical O(C^1.5)
+        # scan would block-reshape (BH,C,NP)<->(BH,nb,K,NP) around a 4D block matmul.
+        # On merged main (f4fab17) the 4D block MATMUL now compiles (probe_blockscan.py,
+        # rel 1.7e-3) but the block RESHAPE does NOT: the in-kernel C-split errors
+        # "reshape split a named dim, re-annotate after the reshape" and the merge-back
+        # is silently WRONG (rel 1.11, probe_blockreshape.py). A carried O(C) recurrence
+        # is also blocked (indexing named C at a fixed coord). So this DENSE scan is the
+        # only working form; C is kept ≤64 by pick_config to stay within its span limit
+        # (see ssd_config.MAX_FLAT_SCAN_CHUNKS). BACKEND ASK: re-annotate named dims
+        # across a splitting reshape → unlocks the hierarchical scan for extreme T.
         bh, c, n, p = chunk_states.shape          # derive from shapes, not module globals
         scan_out = torch.matmul(decay_matrix, chunk_states.reshape(bh, c, n * p))
         if init_state is not None:
