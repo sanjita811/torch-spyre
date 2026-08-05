@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="480" viewBox="0 0 920 480" font-family="system-ui,-apple-system,'Segoe UI',sans-serif">
+  <rect width="920" height="480" fill="#ffffff"/>
+  <text x="60" y="60" font-size="30" font-weight="700" fill="#0b0b0b">Chunk size: the GPU default is the worst choice on Spyre</text>
+  <text x="60" y="96" font-size="18" fill="#52514e">Device sweep at T=4096. Because we are memory-bound, the smallest chunk wins &#8212; opposite of the GPU.</text>
+
+  <!-- axes -->
+  <line x1="150" y1="400" x2="860" y2="400" stroke="#c3c2b7" stroke-width="2"/>
+  <text x="70" y="250" font-size="16" fill="#52514e" text-anchor="middle" transform="rotate(-90 70 250)">device time (ms)</text>
+
+  <!-- L=64 bar: 928ms -> height scaled (4402 -> 320px) => 928*320/4402 = 67 -->
+  <rect x="230" y="333" width="120" height="67" rx="6" fill="#199e70"/>
+  <text x="290" y="323" font-size="20" font-weight="700" fill="#199e70" text-anchor="middle">928 ms</text>
+  <text x="290" y="425" font-size="16" fill="#52514e" text-anchor="middle">L = 64</text>
+  <text x="290" y="447" font-size="13" fill="#898781" text-anchor="middle">Spyre optimum</text>
+
+  <!-- L=128 bar: 1777ms -> 129px -->
+  <rect x="450" y="271" width="120" height="129" rx="6" fill="#8a897f"/>
+  <text x="510" y="261" font-size="20" font-weight="700" fill="#52514e" text-anchor="middle">1777 ms</text>
+  <text x="510" y="425" font-size="16" fill="#52514e" text-anchor="middle">L = 128</text>
+
+  <!-- L=256 bar: 4402ms -> 320px -->
+  <rect x="670" y="80" width="120" height="320" rx="6" fill="#d95926"/>
+  <text x="730" y="70" font-size="20" font-weight="700" fill="#d95926" text-anchor="middle">4402 ms</text>
+  <text x="730" y="425" font-size="16" fill="#52514e" text-anchor="middle">L = 256</text>
+  <text x="730" y="447" font-size="13" fill="#898781" text-anchor="middle">GPU default</text>
+
+  <!-- speedup callout -->
+  <text x="60" y="455" font-size="16" fill="#0b0b0b">Chunk-64 is <tspan font-weight="700" fill="#199e70">~4.7&#215; faster</tspan> than the chunk-256 GPU default &#8212; the big chunk builds a big L&#215;L intermediate we then pay to move.</text>
+</svg>

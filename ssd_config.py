@@ -47,11 +47,10 @@ INTRA_FACTORED_TOTAL_LIMIT = 2.0 * (FP16_EXP_MAX - 1.0)   # ≈ 20.0 (with margi
 # tile the scan matmul, to lift this cap without a kernel-side blocked scan.
 MAX_FLAT_SCAN_CHUNKS = 64
 
-# Largest chunk length L whose intra-chunk (BH,C,L,L) attn intermediate still fits
-# the per-core span limit. Measured: L=256/C=64 compiles (attn≈268MB but splittable
-# on C/BH, unlike the scan's C+1 dim); L≥512 (T≥32768 at C≤64) pushes attn past ~1GB
-# and no split keeps it legal. So L>256 with a FLAT scan can't compile → hierarchical.
-MAX_INTRA_L = 256
+# Largest L whose intra (BH,C,L,L) attn fits the per-core span limit. Measured
+# 2026-08-01: L=512 OK (T=32768/C64, Y=0.0109); L=1024 exceeds 256MB/core + HBM OOM.
+# So flat-scan ceiling = MAX_FLAT_SCAN_CHUNKS·MAX_INTRA_L = 64·512 = 32768.
+MAX_INTRA_L = 512
 
 
 def _l_star(T, N, P):
@@ -80,8 +79,9 @@ def _snap_L(L_cont, T):
 
 
 def _bh_tiles_for(n_bh, L):
-    """Divisor-based BH tile count (matches the historical BH_TILES rule)."""
-    return next(t for t in ([16, 8, 4, 2, 1] if L > 64 else [4, 2, 1]) if n_bh % t == 0)
+    """Largest divisor of n_bh in {16,8,4,2,1}. Device sweep (2026-08-01) found more
+    tiles faster up to ~16 at every L (bh32 only ties bh16 at 2-5x compile)."""
+    return next(t for t in [16, 8, 4, 2, 1] if n_bh % t == 0)
 
 
 def _pick_block_K(C):

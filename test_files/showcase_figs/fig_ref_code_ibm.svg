@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="720" viewBox="0 0 1120 720" font-family="'IBM Plex Sans','IBM Plex Sans Var',system-ui,-apple-system,'Segoe UI',sans-serif">
+  <rect width="1120" height="720" fill="#ffffff"/>
+  <text x="50" y="50" font-size="26" font-weight="600" fill="#161616">The reference SSD algorithm (Mamba-2, ssd_minimal)</text>
+  <text x="50" y="80" font-size="16" fill="#525252">Verbatim from state-spaces/mamba. Each colored block is one of the four stages we mapped onto Spyre.</text>
+
+  <!-- code panel -->
+  <rect x="50" y="100" width="690" height="580" rx="8" fill="#ffffff" stroke="#e0e0e0" stroke-width="1.5"/>
+
+  <!-- stage accent bars (left edge of code panel) -->
+  <rect x="50" y="118" width="6" height="70"  fill="#6f6f6f"/>
+  <rect x="50" y="196" width="6" height="52"  fill="#0f62fe"/>
+  <rect x="50" y="256" width="6" height="86"  fill="#d95926"/>
+  <rect x="50" y="350" width="6" height="150" fill="#199e70"/>
+  <rect x="50" y="508" width="6" height="86"  fill="#8a3ffc"/>
+
+  <!-- code (IBM Plex Mono) -->
+  <g font-family="'IBM Plex Mono',ui-monospace,monospace" font-size="13.5">
+    <!-- setup -->
+    <text x="72" y="138" fill="#6f6f6f"># chunk the sequence: (b, c, l, ...)</text>
+    <text x="72" y="158" fill="#161616">X, A, B, C = [rearrange(x,"b (c l) ..-&gt;b c l ..",l=blk) ..]</text>
+    <text x="72" y="178" fill="#161616">A_cumsum = torch.cumsum(A, dim=-1)</text>
+
+    <!-- stage 1 -->
+    <text x="72" y="212" fill="#0f62fe" font-weight="600"># Stage 1  intra-chunk (local mixing)</text>
+    <text x="72" y="230" fill="#161616">L = torch.exp(segsum(A))</text>
+    <text x="72" y="248" fill="#161616">Y_diag = einsum("bclhn,bcshn,bhcls,bcshp-&gt;bclhp",</text>
+
+    <!-- stage 2 -->
+    <text x="72" y="274" fill="#d95926" font-weight="600"># Stage 2  chunk states (compress each chunk)</text>
+    <text x="72" y="294" fill="#161616">decay_states = exp(A_cumsum[..,-1:] - A_cumsum)</text>
+    <text x="72" y="314" fill="#161616">states = einsum("bclhn,bhcl,bclhp-&gt;bchpn",</text>
+    <text x="92" y="332" fill="#161616">              B, decay_states, X)</text>
+
+    <!-- stage 3 -->
+    <text x="72" y="368" fill="#199e70" font-weight="600"># Stage 3  inter-chunk scan  (the O(C^2) step)</text>
+    <text x="72" y="388" fill="#161616">if initial_states is None:</text>
+    <text x="92" y="406" fill="#161616">initial_states = zeros_like(states[:, :1])</text>
+    <text x="72" y="424" fill="#161616">states = cat([initial_states, states], dim=1)</text>
+    <text x="72" y="444" fill="#b5651d">decay_chunk = exp(segsum(pad(A_cumsum[..,-1])))</text>
+    <text x="72" y="464" fill="#b5651d">new_states = einsum("bhzc,bchpn-&gt;bzhpn",</text>
+    <text x="92" y="482" fill="#b5651d">              decay_chunk, states)  # dense C x C</text>
+    <text x="72" y="500" fill="#161616">states, final = new_states[:, :-1], new_states[:,-1]</text>
+
+    <!-- stage 4 -->
+    <text x="72" y="526" fill="#8a3ffc" font-weight="600"># Stage 4  combine (states -&gt; output + local)</text>
+    <text x="72" y="546" fill="#161616">state_decay_out = torch.exp(A_cumsum)</text>
+    <text x="72" y="566" fill="#161616">Y_off = einsum("bclhn,bchpn,bhcl-&gt;bclhp",</text>
+    <text x="92" y="584" fill="#161616">              C, states, state_decay_out)</text>
+
+    <!-- return -->
+    <text x="72" y="620" fill="#161616">Y = rearrange(Y_diag + Y_off,"b c l h p-&gt;b (c l) h p")</text>
+    <text x="72" y="640" fill="#161616">return Y, final_state</text>
+    <text x="72" y="666" fill="#6f6f6f"># segsum builds the lower-triangular decay matrix</text>
+  </g>
+
+  <!-- ============ right: stage map ============ -->
+  <text x="770" y="128" font-size="17" font-weight="600" fill="#161616">Four stages</text>
+
+  <!-- s1 -->
+  <rect x="770" y="150" width="14" height="14" fill="#0f62fe"/>
+  <text x="794" y="162" font-size="14.5" font-weight="600" fill="#161616">1 &#183; Intra-chunk</text>
+  <text x="794" y="182" font-size="13" fill="#525252">tokens interact within a chunk;</text>
+  <text x="794" y="200" font-size="13" fill="#525252">masked matmul (Y_diag).</text>
+
+  <!-- s2 -->
+  <rect x="770" y="224" width="14" height="14" fill="#d95926"/>
+  <text x="794" y="236" font-size="14.5" font-weight="600" fill="#161616">2 &#183; Chunk states</text>
+  <text x="794" y="256" font-size="13" fill="#525252">compress each chunk into one</text>
+  <text x="794" y="274" font-size="13" fill="#525252">compact state.</text>
+
+  <!-- s3 -->
+  <rect x="770" y="298" width="14" height="14" fill="#199e70"/>
+  <text x="794" y="310" font-size="14.5" font-weight="600" fill="#161616">3 &#183; Inter-chunk scan</text>
+  <text x="794" y="330" font-size="13" fill="#525252">carry state across chunks.</text>
+  <text x="794" y="348" font-size="13" fill="#b5651d">Builds a dense C&#215;C decay</text>
+  <text x="794" y="366" font-size="13" fill="#b5651d">matrix &#8594; O(C&#178;), our bottleneck.</text>
+
+  <!-- s4 -->
+  <rect x="770" y="390" width="14" height="14" fill="#8a3ffc"/>
+  <text x="794" y="402" font-size="14.5" font-weight="600" fill="#161616">4 &#183; Combine</text>
+  <text x="794" y="422" font-size="13" fill="#525252">project states back to outputs,</text>
+  <text x="794" y="440" font-size="13" fill="#525252">add local + carried history.</text>
+
+  <!-- key callout box -->
+  <rect x="770" y="472" width="300" height="152" rx="8" fill="#eef3fd" stroke="#0f62fe" stroke-width="1.5"/>
+  <text x="788" y="498" font-size="14" font-weight="600" fill="#0f62fe">What we changed for Spyre</text>
+  <text x="788" y="522" font-size="12.5" fill="#525252">&#183; einsum &#8594; chain of batched matmuls</text>
+  <text x="788" y="542" font-size="12.5" fill="#525252">&#183; cumsum &#8594; A @ triangular ones</text>
+  <text x="788" y="562" font-size="12.5" fill="#525252">&#183; exp(segsum) decay folded into operands</text>
+  <text x="788" y="582" font-size="12.5" fill="#525252">&#183; centered exp for fp16 safety</text>
+  <text x="788" y="606" font-size="12.5" fill="#161616" font-weight="600">Same math, matmul-shaped.</text>
+
+  <text x="770" y="662" font-size="12" fill="#8a6a00">Stage 3 is the only sequential step and</text>
+  <text x="770" y="678" font-size="12" fill="#8a6a00">the piece that walls us at 64K.</text>
+</svg>

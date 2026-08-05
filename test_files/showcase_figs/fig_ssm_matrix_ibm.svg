@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="560" viewBox="0 0 980 560" font-family="'IBM Plex Sans','IBM Plex Sans Var',system-ui,-apple-system,'Segoe UI',sans-serif">
+  <rect width="980" height="560" fill="#ffffff"/>
+  <text x="60" y="52" font-size="24" font-weight="600" fill="#161616">Matrix form (SSD) &#8212; same colors, one matmul</text>
+
+  <!-- column headers (input tokens) -->
+  <text x="405" y="118" font-size="18" font-weight="600" fill="#0f62fe" text-anchor="middle">u&#8321;</text>
+  <text x="535" y="118" font-size="18" font-weight="600" fill="#8a3ffc" text-anchor="middle">u&#8322;</text>
+  <text x="665" y="118" font-size="18" font-weight="600" fill="#d02670" text-anchor="middle">u&#8323;</text>
+  <text x="795" y="118" font-size="18" font-weight="600" fill="#007d79" text-anchor="middle">u&#8324;</text>
+
+  <!-- row labels (outputs) -->
+  <text x="320" y="172" font-size="18" fill="#525252" text-anchor="end">y&#8321;</text>
+  <text x="320" y="262" font-size="18" fill="#525252" text-anchor="end">y&#8322;</text>
+  <text x="320" y="352" font-size="18" fill="#525252" text-anchor="end">y&#8323;</text>
+  <text x="320" y="442" font-size="18" fill="#525252" text-anchor="end">y&#8324;</text>
+
+  <!-- grid geometry: cols x = 350,480,610,740 ; rows y = 140,230,320,410 ; cell 120x80 gap 10 -->
+  <!-- column u1 (blue #0f62fe): diagonal brightest, fainter downward -->
+  <rect x="350" y="140" width="120" height="80" rx="6" fill="#0f62fe" fill-opacity="1.00"/>
+  <rect x="350" y="230" width="120" height="80" rx="6" fill="#0f62fe" fill-opacity="0.55"/>
+  <rect x="350" y="320" width="120" height="80" rx="6" fill="#0f62fe" fill-opacity="0.32"/>
+  <rect x="350" y="410" width="120" height="80" rx="6" fill="#0f62fe" fill-opacity="0.18"/>
+
+  <!-- column u2 (purple #8a3ffc) -->
+  <rect x="480" y="140" width="120" height="80" rx="6" fill="#f4f4f4"/>
+  <rect x="480" y="230" width="120" height="80" rx="6" fill="#8a3ffc" fill-opacity="1.00"/>
+  <rect x="480" y="320" width="120" height="80" rx="6" fill="#8a3ffc" fill-opacity="0.55"/>
+  <rect x="480" y="410" width="120" height="80" rx="6" fill="#8a3ffc" fill-opacity="0.32"/>
+
+  <!-- column u3 (magenta #d02670) -->
+  <rect x="610" y="140" width="120" height="80" rx="6" fill="#f4f4f4"/>
+  <rect x="610" y="230" width="120" height="80" rx="6" fill="#f4f4f4"/>
+  <rect x="610" y="320" width="120" height="80" rx="6" fill="#d02670" fill-opacity="1.00"/>
+  <rect x="610" y="410" width="120" height="80" rx="6" fill="#d02670" fill-opacity="0.55"/>
+
+  <!-- column u4 (teal #007d79) -->
+  <rect x="740" y="140" width="120" height="80" rx="6" fill="#f4f4f4"/>
+  <rect x="740" y="230" width="120" height="80" rx="6" fill="#f4f4f4"/>
+  <rect x="740" y="320" width="120" height="80" rx="6" fill="#f4f4f4"/>
+  <rect x="740" y="410" width="120" height="80" rx="6" fill="#007d79" fill-opacity="1.00"/>
+
+  <!-- subtle grid outline over masked (empty) cells -->
+  <g fill="none" stroke="#e0e0e0" stroke-width="1.5">
+    <rect x="480" y="140" width="120" height="80" rx="6"/>
+    <rect x="610" y="140" width="120" height="80" rx="6"/><rect x="610" y="230" width="120" height="80" rx="6"/>
+    <rect x="740" y="140" width="120" height="80" rx="6"/><rect x="740" y="230" width="120" height="80" rx="6"/><rect x="740" y="320" width="120" height="80" rx="6"/>
+  </g>
+
+  <text x="490" y="530" font-size="17" fill="#525252" text-anchor="middle">Fainter = older input, contributing less.  Blank = masked (future, not yet seen)</text>
+</svg>

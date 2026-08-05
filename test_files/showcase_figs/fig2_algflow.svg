@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="440" viewBox="0 0 920 440" font-family="system-ui,-apple-system,'Segoe UI',sans-serif">
+  <rect width="920" height="440" fill="#ffffff"/>
+  <text x="60" y="60" font-size="30" font-weight="700" fill="#0b0b0b">One GPU algorithm → four Spyre-legal stages</text>
+  <text x="60" y="96" font-size="18" fill="#52514e">The sequence is split into chunks; each stage rebuilds a giant reference operation as batched matmuls.</text>
+
+  <!-- 4 boxes -->
+  <g>
+    <rect x="60"  y="150" width="180" height="140" rx="12" fill="#f9f9f7" stroke="#2a78d6" stroke-width="2"/>
+    <text x="150" y="180" font-size="13" font-weight="700" fill="#2a78d6" text-anchor="middle">STAGE 1</text>
+    <text x="150" y="212" font-size="20" font-weight="700" fill="#0b0b0b" text-anchor="middle">Intra-chunk</text>
+    <text x="150" y="244" font-size="14" fill="#52514e" text-anchor="middle">local mixing</text>
+    <text x="150" y="264" font-size="14" fill="#52514e" text-anchor="middle">within a chunk</text>
+  </g>
+  <g>
+    <rect x="290" y="150" width="180" height="140" rx="12" fill="#f9f9f7" stroke="#eb6834" stroke-width="2"/>
+    <text x="380" y="180" font-size="13" font-weight="700" fill="#eb6834" text-anchor="middle">STAGE 2</text>
+    <text x="380" y="212" font-size="20" font-weight="700" fill="#0b0b0b" text-anchor="middle">Chunk states</text>
+    <text x="380" y="244" font-size="14" fill="#52514e" text-anchor="middle">summarize each</text>
+    <text x="380" y="264" font-size="14" fill="#52514e" text-anchor="middle">chunk to a state</text>
+  </g>
+  <g>
+    <rect x="520" y="150" width="180" height="140" rx="12" fill="#f9f9f7" stroke="#1baf7a" stroke-width="2"/>
+    <text x="610" y="180" font-size="13" font-weight="700" fill="#1baf7a" text-anchor="middle">STAGE 3</text>
+    <text x="610" y="212" font-size="20" font-weight="700" fill="#0b0b0b" text-anchor="middle">Chunk scan</text>
+    <text x="610" y="244" font-size="14" fill="#52514e" text-anchor="middle">carry state</text>
+    <text x="610" y="264" font-size="14" fill="#52514e" text-anchor="middle">across chunks</text>
+  </g>
+  <g>
+    <rect x="750" y="150" width="110" height="140" rx="12" fill="#f9f9f7" stroke="#eda100" stroke-width="2"/>
+    <text x="805" y="180" font-size="13" font-weight="700" fill="#c98500" text-anchor="middle">STAGE 4</text>
+    <text x="805" y="212" font-size="20" font-weight="700" fill="#0b0b0b" text-anchor="middle">Combine</text>
+    <text x="805" y="248" font-size="14" fill="#52514e" text-anchor="middle">output Y</text>
+  </g>
+
+  <!-- arrows -->
+  <g fill="#898781">
+    <text x="262" y="228" font-size="26" text-anchor="middle">→</text>
+    <text x="492" y="228" font-size="26" text-anchor="middle">→</text>
+    <text x="722" y="228" font-size="26" text-anchor="middle">→</text>
+  </g>
+
+  <text x="60" y="360" font-size="16" fill="#0b0b0b"><tspan font-weight="700">Fused into one compiled kernel.</tspan>  The recurrence (Stage 3) is what makes SSMs linear-time.</text>
+  <text x="60" y="392" font-size="15" fill="#52514e">Techniques: cumulative-sum as matrix-multiply · decay folded into operands (no giant intermediate) · half-precision-safe exponentials</text>
+</svg>

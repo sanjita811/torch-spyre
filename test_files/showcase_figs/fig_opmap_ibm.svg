@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="600" viewBox="0 0 1120 600" font-family="'IBM Plex Sans','IBM Plex Sans Var',system-ui,-apple-system,'Segoe UI',sans-serif">
+  <rect width="1120" height="600" fill="#ffffff"/>
+  <text x="50" y="52" font-size="26" font-weight="600" fill="#161616">If Spyre can&#8217;t run it directly, we rewrite it as a matmul</text>
+  <text x="50" y="84" font-size="17" fill="#525252">The reference is written for GPUs. Each operation is rewritten in what Spyre runs natively: same math, new shape.</text>
+
+  <!-- header row -->
+  <line x1="50" y1="108" x2="1070" y2="108" stroke="#e0e0e0" stroke-width="1.5"/>
+  <text x="60"  y="132" font-size="14" font-weight="600" fill="#6f6f6f">REFERENCE (GPU)</text>
+  <text x="360" y="132" font-size="14" font-weight="600" fill="#6f6f6f">SPYRE REALIZATION</text>
+  <text x="660" y="132" font-size="14" font-weight="600" fill="#6f6f6f">WHY</text>
+  <line x1="50" y1="146" x2="1070" y2="146" stroke="#161616" stroke-width="2"/>
+  <!-- column dividers -->
+  <line x1="340" y1="146" x2="340" y2="560" stroke="#e0e0e0" stroke-width="1.5"/>
+  <line x1="642" y1="146" x2="642" y2="560" stroke="#e0e0e0" stroke-width="1.5"/>
+
+  <!-- row 1: einsum -->
+  <text x="60"  y="188" font-size="15" font-weight="600" fill="#161616">Dense einsum</text>
+  <text x="60"  y="212" font-size="12.5" fill="#525252" font-family="'IBM Plex Mono',monospace">bclhn,bcshn,</text>
+  <text x="60"  y="230" font-size="12.5" fill="#525252" font-family="'IBM Plex Mono',monospace">bhcls,bcshp&#8594;bclhp</text>
+  <text x="352" y="188" font-size="15" fill="#161616">Chain of batched matmuls</text>
+  <text x="352" y="212" font-size="13" fill="#0f62fe" font-family="'IBM Plex Mono',monospace">C&#771; @ B&#771;&#7488; ,  attn @ X</text>
+  <text x="660" y="196" font-size="14" fill="#525252">No einsum support currently; we split the</text>
+  <text x="660" y="216" font-size="14" fill="#525252">one dense contraction into matmuls it runs.</text>
+
+  <line x1="50" y1="256" x2="1070" y2="256" stroke="#e0e0e0" stroke-width="1"/>
+
+  <!-- row 2: cumsum -->
+  <text x="60"  y="298" font-size="15" font-weight="600" fill="#161616">torch.cumsum(A)</text>
+  <text x="60"  y="322" font-size="12.5" fill="#525252">running sum along L</text>
+  <text x="352" y="298" font-size="15" fill="#161616">Multiply by triangular ones</text>
+  <text x="352" y="322" font-size="13" fill="#0f62fe" font-family="'IBM Plex Mono',monospace">g = A @ triu(1)</text>
+  <text x="660" y="306" font-size="14" fill="#525252">No cumsum support currently; a triangular</text>
+  <text x="660" y="326" font-size="14" fill="#525252">matmul computes the same prefix sum.</text>
+
+  <line x1="50" y1="348" x2="1070" y2="348" stroke="#e0e0e0" stroke-width="1"/>
+
+  <!-- row 3: dense decay -->
+  <text x="60"  y="390" font-size="15" font-weight="600" fill="#161616">exp(segsum A)</text>
+  <text x="60"  y="414" font-size="12.5" fill="#525252">dense L&#215;L decay matrix</text>
+  <text x="352" y="390" font-size="15" fill="#161616">Fold decay into the operands</text>
+  <text x="352" y="414" font-size="13" fill="#0f62fe" font-family="'IBM Plex Mono',monospace">C&#771;=C&#183;e&#7501;,  B&#771;=B&#183;e&#8315;&#7501;</text>
+  <text x="660" y="390" font-size="14" fill="#525252">We are memory bound, so we never build</text>
+  <text x="660" y="410" font-size="14" fill="#525252">the large L&#215;L matrix. Folding the decay</text>
+  <text x="660" y="430" font-size="14" fill="#525252">into the inputs lets the matmul rebuild it.</text>
+
+  <line x1="50" y1="448" x2="1070" y2="448" stroke="#e0e0e0" stroke-width="1"/>
+
+  <!-- row 4: fp16 -->
+  <text x="60"  y="490" font-size="15" font-weight="600" fill="#161616">fp16 arithmetic</text>
+  <text x="60"  y="514" font-size="12.5" fill="#525252">exponentials overflow</text>
+  <text x="352" y="490" font-size="15" fill="#161616">Center the exponent</text>
+  <text x="352" y="514" font-size="13" fill="#0f62fe" font-family="'IBM Plex Mono',monospace">s = g &#8722; &#189;&#183;total</text>
+  <text x="660" y="498" font-size="14" fill="#525252">Centering halves the exponent range,</text>
+  <text x="660" y="518" font-size="14" fill="#525252">keeping every value inside fp16.</text>
+
+  <line x1="50" y1="548" x2="1070" y2="548" stroke="#e0e0e0" stroke-width="1.5"/>
+  <text x="50" y="580" font-size="14" fill="#8a6a00">Same math as the reference. Only the <tspan font-weight="600">shape of the computation</tspan> changes to fit the hardware.</text>
+</svg>

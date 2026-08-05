@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="440" viewBox="0 0 920 440" font-family="system-ui,-apple-system,'Segoe UI',sans-serif">
+  <rect width="920" height="440" fill="#ffffff"/>
+  <text x="60" y="60" font-size="30" font-weight="700" fill="#0b0b0b">Correct &amp; running up to 32K tokens</text>
+  <text x="60" y="96" font-size="18" fill="#52514e">Error stays within the half-precision budget across the whole range. Max length doubled this cycle.</text>
+
+  <!-- axes -->
+  <line x1="120" y1="330" x2="860" y2="330" stroke="#c3c2b7" stroke-width="2"/>
+  <line x1="120" y1="140" x2="120" y2="330" stroke="#c3c2b7" stroke-width="2"/>
+  <text x="108" y="335" font-size="13" fill="#898781" text-anchor="end">0</text>
+  <text x="108" y="150" font-size="13" fill="#898781" text-anchor="end">0.05</text>
+  <text x="70" y="240" font-size="14" fill="#898781" transform="rotate(-90 70 240)" text-anchor="middle">error (rel-L2)</text>
+
+  <!-- budget line at 0.05 -->
+  <line x1="120" y1="140" x2="860" y2="140" stroke="#fab219" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="860" y="132" font-size="13" fill="#c98500" text-anchor="end">accuracy budget = 0.05</text>
+
+  <!-- bars: heights scaled so 0.05 -> full 190px. values tiny, so scale x for visibility (relative shape) -->
+  <!-- 4K .0039  8K .0047  16K .0057  32K .0109  64K blocked -->
+  <!-- use height = value/0.05 * 190 -->
+  <g fill="#0ca30c">
+    <rect x="160" y="315.2" width="90" height="14.8" rx="4"/>
+    <rect x="300" y="312.1" width="90" height="17.9" rx="4"/>
+    <rect x="440" y="308.3" width="90" height="21.7" rx="4"/>
+    <rect x="580" y="288.6" width="90" height="41.4" rx="4"/>
+  </g>
+  <g font-size="14" font-weight="700" fill="#0b0b0b" text-anchor="middle">
+    <text x="205" y="305">0.0039</text>
+    <text x="345" y="302">0.0047</text>
+    <text x="485" y="298">0.0057</text>
+    <text x="625" y="279">0.0109</text>
+  </g>
+  <!-- 64K blocked -->
+  <rect x="720" y="250" width="90" height="80" rx="4" fill="none" stroke="#d03b3b" stroke-width="2" stroke-dasharray="5 4"/>
+  <text x="765" y="296" font-size="26" fill="#d03b3b" text-anchor="middle">&#10007;</text>
+
+  <!-- x labels -->
+  <g font-size="15" fill="#52514e" text-anchor="middle">
+    <text x="205" y="352">4K</text>
+    <text x="345" y="352">8K</text>
+    <text x="485" y="352">16K</text>
+    <text x="625" y="352">32K</text>
+    <text x="765" y="352" fill="#d03b3b">64K</text>
+  </g>
+  <text x="490" y="382" font-size="14" fill="#898781" text-anchor="middle">sequence length (tokens)</text>
+
+  <text x="60" y="418" font-size="16" fill="#0b0b0b">Green = validated on-device.  <tspan fill="#d03b3b" font-weight="700">64K</tspan> is the next frontier — blocked by one identified backend limitation, not by our math.</text>
+</svg>

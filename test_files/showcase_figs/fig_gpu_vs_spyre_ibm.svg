@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="640" viewBox="0 0 1120 640" font-family="'IBM Plex Sans','IBM Plex Sans Var',system-ui,-apple-system,'Segoe UI',sans-serif">
+  <rect width="1120" height="640" fill="#ffffff"/>
+  <text x="50" y="52" font-size="27" font-weight="600" fill="#161616">Why running this on Spyre took real work</text>
+  <text x="50" y="84" font-size="17" fill="#525252">The model was written for GPUs. Spyre is a different kind of machine, so the recipe had to be rebuilt from scratch.</text>
+
+  <!-- ===== two columns ===== -->
+  <!-- GPU column -->
+  <rect x="50" y="110" width="500" height="470" rx="10" fill="#ffffff" stroke="#e0e0e0" stroke-width="1.5"/>
+  <rect x="50" y="110" width="500" height="54" rx="10" fill="#f4f4f4"/>
+  <rect x="50" y="140" width="500" height="24" fill="#f4f4f4"/>
+  <text x="74" y="145" font-size="20" font-weight="600" fill="#161616">GPU  —  where the model was born</text>
+
+  <text x="74" y="200" font-size="15" font-weight="600" fill="#0f62fe">A flexible generalist</text>
+  <text x="74" y="228" font-size="15" fill="#525252">Runs almost any operation out of the box.</text>
+  <text x="74" y="256" font-size="15" fill="#525252">Large, forgiving memory &#8212; data can sit</text>
+  <text x="74" y="276" font-size="15" fill="#525252">almost anywhere and still be reached fast.</text>
+  <text x="74" y="304" font-size="15" fill="#525252">The original code &#8220;just works.&#8221;</text>
+
+  <text x="74" y="360" font-size="15" font-weight="600" fill="#161616">Analogy</text>
+  <text x="74" y="388" font-size="15" fill="#525252">A well-stocked home kitchen. Every tool</text>
+  <text x="74" y="408" font-size="15" fill="#525252">is in a drawer, ingredients anywhere on</text>
+  <text x="74" y="428" font-size="15" fill="#525252">the counter. Follow any recipe as written.</text>
+
+  <text x="74" y="500" font-size="14" fill="#6f6f6f" font-style="italic">Powerful and general &#8212;</text>
+  <text x="74" y="522" font-size="14" fill="#6f6f6f" font-style="italic">but power-hungry and expensive.</text>
+
+  <!-- Spyre column -->
+  <rect x="580" y="110" width="490" height="470" rx="10" fill="#ffffff" stroke="#0f62fe" stroke-width="2"/>
+  <rect x="580" y="110" width="490" height="54" rx="10" fill="#edf5ff"/>
+  <rect x="580" y="140" width="490" height="24" fill="#edf5ff"/>
+  <text x="604" y="145" font-size="20" font-weight="600" fill="#0f62fe">Spyre  —  IBM&#8217;s efficient accelerator</text>
+
+  <text x="604" y="200" font-size="15" font-weight="600" fill="#0f62fe">A specialized speedster</text>
+  <text x="604" y="228" font-size="15" fill="#525252">Does one thing extremely fast: multiply</text>
+  <text x="604" y="248" font-size="15" fill="#525252">matrices. Many ops aren&#8217;t built in.</text>
+  <text x="604" y="276" font-size="15" fill="#525252">Memory is rigid &#8212; data must be laid out</text>
+  <text x="604" y="296" font-size="15" fill="#525252">in fixed slots, and moving it has a cost.</text>
+
+  <text x="604" y="360" font-size="15" font-weight="600" fill="#161616">Analogy</text>
+  <text x="604" y="388" font-size="15" fill="#525252">A championship kitchen built for ONE dish.</text>
+  <text x="604" y="408" font-size="15" fill="#525252">Blazing fast &#8212; but every other recipe must</text>
+  <text x="604" y="428" font-size="15" fill="#525252">be rewritten using only its tools, with</text>
+  <text x="604" y="448" font-size="15" fill="#525252">ingredients pre-arranged in exact spots.</text>
+
+  <text x="604" y="500" font-size="14" fill="#6f6f6f" font-style="italic">Far more efficient &#8212;</text>
+  <text x="604" y="522" font-size="14" fill="#6f6f6f" font-style="italic">if you can fit your recipe to it.</text>
+
+  <!-- ===== bottom takeaway band ===== -->
+  <rect x="50" y="596" width="1020" height="0" fill="none"/>
+  <text x="50" y="620" font-size="16" fill="#161616"><tspan font-weight="600">Our work:</tspan> take the GPU recipe and rewrite every step using only Spyre&#8217;s tools &#8212; same dish, made to run on the faster, greener machine.</text>
+</svg>

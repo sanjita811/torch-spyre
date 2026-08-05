@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="360" viewBox="0 0 920 360" font-family="system-ui,-apple-system,'Segoe UI',sans-serif">
+  <rect width="920" height="360" fill="#ffffff"/>
+  <text x="60" y="60" font-size="30" font-weight="700" fill="#0b0b0b">Validated against the paper reference and a CPU math mirror</text>
+  <text x="60" y="96" font-size="18" fill="#52514e">Relative L2 error vs the Mamba-2 reference &#8212; on-device accuracy sits at the fp16 numerical floor.</text>
+
+  <!-- tile 1 -->
+  <rect x="60" y="140" width="250" height="170" rx="10" fill="#f5f4ee" stroke="#c3c2b7" stroke-width="1.5"/>
+  <text x="185" y="180" font-size="15" fill="#52514e" text-anchor="middle">fp32 math (kernel logic)</text>
+  <text x="185" y="240" font-size="42" font-weight="700" fill="#199e70" text-anchor="middle">4&#215;10&#8315;&#8308;</text>
+  <text x="185" y="278" font-size="15" fill="#898781" text-anchor="middle">essentially exact</text>
+
+  <!-- tile 2 -->
+  <rect x="335" y="140" width="250" height="170" rx="10" fill="#f5f4ee" stroke="#c3c2b7" stroke-width="1.5"/>
+  <text x="460" y="180" font-size="15" fill="#52514e" text-anchor="middle">on-device fp16 (Spyre)</text>
+  <text x="460" y="240" font-size="42" font-weight="700" fill="#199e70" text-anchor="middle">3.8&#215;10&#8315;&#179;</text>
+  <text x="460" y="278" font-size="15" fill="#898781" text-anchor="middle">at the half-precision floor</text>
+
+  <!-- tile 3 -->
+  <rect x="610" y="140" width="250" height="170" rx="10" fill="#f5f4ee" stroke="#c3c2b7" stroke-width="1.5"/>
+  <text x="735" y="180" font-size="15" fill="#52514e" text-anchor="middle">coverage</text>
+  <text x="735" y="240" font-size="42" font-weight="700" fill="#199e70" text-anchor="middle">100%</text>
+  <text x="735" y="278" font-size="15" fill="#898781" text-anchor="middle">all shapes within budget &#10003;</text>
+
+  <text x="60" y="345" font-size="15" fill="#0b0b0b">CPU mirror pinpoints whether a discrepancy is <tspan font-weight="700">our math</tspan> or <tspan font-weight="700">the hardware</tspan>; an fp16 behavior model tunes correctness in seconds.</text>
+</svg>

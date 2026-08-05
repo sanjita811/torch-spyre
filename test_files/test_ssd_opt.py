@@ -34,14 +34,22 @@ except (ImportError, ModuleNotFoundError):
 
 # ============================ config (Mamba-2 names) ====================
 # B=batch T=seqlen H=dim P=headdim nheads=H//P N=d_state L=chunk C=T//L G=ngroups.
+# Default is the T=4096 demo (L=64); use best_config/pick_config for other shapes.
 B, T, H, P, N, L = 2, 4096, 2048, 64, 128, 64
 nheads = H // P
 G = 1
 C = T // L
+BH_TILES = 8
+FP16_EXP_MAX = 11.0
+INTRA_FACTORED_TOTAL_LIMIT = 2.0 * (FP16_EXP_MAX - 1.0)
 
-# BH tile count for spyre_hint (cores); prefer 16, fall to 8/4/2/1 by divisibility.
-_bh = B * nheads
-BH_TILES = next(t for t in [16, 8, 4, 2, 1] if _bh % t == 0)
+# N-block width for the split-scan kernel (scan_combine_kernel). Blocking the
+# state's N dim shrinks the dense scan's ~545MB (BH,C+1,NP,C) intermediate
+# ~N/N_BLOCK×. N_BLOCK·P must be a stick multiple (P=64 → any) and divide N.
+N_BLOCK = 64
+SPLIT_SCAN = False         # split-scan backend-blocked (N=128 crosses 64-stick); keep fused
+
+
 
 
 # ======================= reference (CPU, ground truth) ==================
@@ -98,35 +106,6 @@ def _declare_dims(n_chunks=C, chunk_len=L):
         declare_tensor_dim(name, size)
 
 
-# Chunk-size / tiling policy lives in ssd_config.py (pure arithmetic, no torch).
-# ssd_spyre; INTRA_FACTORED_TOTAL_LIMIT is the fp16 guard threshold reused below.
-from ssd_config import (  # noqa: E402
-    INTRA_FACTORED_TOTAL_LIMIT,
-    SSDConfig,
-    pick_config,
-)
-
-
-# Device-verified best config per T for the B2/H2048/P64/N128 shape (all C=64,
-# bh=16; L grows with T). Runnable T<=32768; see ssd_config.py for the limits.
-_BEST_CONFIG_BY_T = {
-    4096:  SSDConfig(L=64,  bh_tiles=8, intra="factored"),
-    8192:  SSDConfig(L=128, bh_tiles=16, intra="factored"),
-    16384: SSDConfig(L=256, bh_tiles=32, intra="factored"),
-    32768: SSDConfig(L=512, bh_tiles=32, intra="masked"),
-}
-
-
-def best_config(T_, B_=None, H_=None, P_=None, N_=None):
-    """Measured-best SSDConfig for ``T_`` on the swept B2/H2048/P64/N128 shape;
-    falls back to analytic ``pick_config`` for other T or shapes."""
-    default_shape = (B_, H_, P_, N_) in ((None, None, None, None), (2, 2048, 64, 128))
-    cfg = _BEST_CONFIG_BY_T.get(T_) if default_shape else None
-    if cfg is not None:
-        return cfg
-    return pick_config(B_ or B, T_, H_ or H, P_ or P, N_ or N)
-
-
 def _intra_decay_factored_safe(chunk_decay):
     """True iff the FACTORED intra-decay stays within fp16 range for every row."""
     return float(chunk_decay.abs().max()) < INTRA_FACTORED_TOTAL_LIMIT
@@ -174,8 +153,8 @@ def fused_kernel(a, cumsum_tri, c_proj, b_proj, causal_mask, x, decay_matrix,
         y_diag = torch.matmul(attn, x_c)                                # (BH, C, L, P)
         chunk_states = torch.matmul(b_scaled_t, x_c) * torch.exp(0.5 * total).unsqueeze(-1)
 
-        # --- inter-chunk scan ---
-        bh, c, n, p = chunk_states.shape          
+        # --- inter-chunk scan (dense O(C²) matmul; sub-quadratic scan backend-blocked) ---
+        bh, c, n, p = chunk_states.shape          # derive from shapes, not module globals
         scan_out = torch.matmul(decay_matrix, chunk_states.reshape(bh, c, n * p))
         if init_state is not None:
             scan_out = scan_out + init_col * init_state               # (BH,C+1,N·P)
@@ -184,6 +163,59 @@ def fused_kernel(a, cumsum_tri, c_proj, b_proj, causal_mask, x, decay_matrix,
         # --- off-diagonal + combine ---
         y_off = torch.matmul(c_scaled, rolled_states) * torch.exp(0.5 * total).unsqueeze(-1)
         return y_off + y_diag, scan_out
+
+
+def fused_kernel_intra(a, cumsum_tri, c_proj, b_proj, causal_mask, x):
+    """SPLIT-SCAN kernel A: intra-chunk only. Returns y_diag, chunk_states, c_scaled,
+    and the exp(0.5·total) scalar — the scan+combine (kernel B) consumes these as
+    PLAIN INPUTS so it can N-block the scan (slicing an N-carrying INTERMEDIATE in
+    one hint group is backend-blocked; a plain input is not — 5 in-kernel variants
+    confirmed this). See scan_combine_kernel."""
+    with spyre_hint(num_tiles_per_dim={"BH": BH_TILES}):
+        a_c = a * 1.0
+        c_c = c_proj * 1.0
+        b_c = b_proj * 1.0
+        x_c = x * 1.0
+        intra_cumsum = torch.matmul(a_c, cumsum_tri)                    # (BH, C, L) = g
+        total = a_c.sum(dim=-1, keepdim=True)                          # (BH, C, 1)
+        shifted = intra_cumsum - 0.5 * total
+        c_scaled = c_c * torch.exp(shifted).unsqueeze(-1)             # (BH,C,L,N)
+        b_scaled = b_c * torch.exp(-shifted).unsqueeze(-1)           # (BH,C,La,N)
+        b_scaled_t = b_scaled.transpose(-1, -2)                        # (BH,C,N,La)
+        attn = torch.matmul(c_scaled, b_scaled_t) * causal_mask
+        y_diag = torch.matmul(attn, x_c)                                # (BH, C, L, P)
+        half_total = torch.exp(0.5 * total)                            # (BH,C,1)
+        chunk_states = torch.matmul(b_scaled_t, x_c) * half_total.unsqueeze(-1)
+        return y_diag, chunk_states, c_scaled, half_total
+
+
+def scan_combine_kernel(decay_matrix, chunk_states, c_scaled, half_total,
+                        init_state=None, init_col=None):
+    """SPLIT-SCAN kernel B: N-blocked inter-chunk scan + off-diagonal combine.
+    chunk_states/c_scaled are PLAIN INPUTS here, so N-slicing is layout-feasible.
+    Blocks the state's N dim: each block's scan is a small matmul (no giant
+    (BH,C+1,NP,C) intermediate), y_off (which contracts N) accumulates over blocks
+    via copy_f. Peak scan pool ~46-59MB vs ~545MB dense (device-verified probes)."""
+    with spyre_hint(num_tiles_per_dim={"BH": BH_TILES}):
+        cs_c = chunk_states * 1.0
+        csc_c = c_scaled * 1.0
+        dm_c = decay_matrix * 1.0
+        bh, c, n, p = cs_c.shape
+        y_off = None
+        scan_cols = []
+        for n0 in range(0, n, N_BLOCK):
+            cs_blk = cs_c[:, :, n0:n0 + N_BLOCK, :].reshape(bh, c, N_BLOCK * p)
+            scan_blk = torch.matmul(dm_c, cs_blk)                     # (BH,C+1,N_BLOCK·P)
+            if init_state is not None:
+                scan_blk = scan_blk + init_col * init_state[:, :, n0 * p:(n0 + N_BLOCK) * p]
+            scan_cols.append(scan_blk)
+            rolled_blk = scan_blk[:, :c].reshape(bh, c, N_BLOCK, p)
+            c_blk = csc_c[:, :, :, n0:n0 + N_BLOCK]                   # (BH,C,L,N_BLOCK)
+            part = torch.matmul(c_blk, rolled_blk)                    # (BH,C,L,P) partial
+            y_off = part if y_off is None else torch.ops.spyre.copy_f(y_off + part, y_off)
+        y_off = y_off * half_total.unsqueeze(-1)
+        scan_out = torch.cat(scan_cols, dim=-1)                       # (BH,C+1,N·P) terminal
+        return y_off, scan_out
 
 
 def fused_kernel_masked(a, cumsum_tri, c_proj, b_proj, decay_intra, x, decay_matrix,
@@ -217,63 +249,9 @@ def fused_kernel_masked(a, cumsum_tri, c_proj, b_proj, decay_intra, x, decay_mat
 
 
 # ===================== CPU mirror (formulation validator) ===============
-# ssd_cpu runs the identical op sequence on plain CPU torch
-def _ssd_core_cpu(a, cumsum_tri, c_proj, b_proj, x, decay_matrix,
-                  causal_mask=None, decay_intra=None, init_state=None, init_col=None):
-    """CPU twin of fused_kernel"""
-    intra_cumsum = torch.matmul(a, cumsum_tri)                          # (BH, C, L) = g
-    total = a.sum(dim=-1, keepdim=True)                                 # (BH, C, 1)
-    if decay_intra is None:
-        # factored fast path (mirrors fused_kernel)
-        shifted = intra_cumsum - 0.5 * total
-        c_scaled = c_proj * torch.exp(shifted).unsqueeze(-1)
-        b_scaled = b_proj * torch.exp(-shifted).unsqueeze(-1)
-        b_scaled_t = b_scaled.transpose(-1, -2)
-        attn = torch.matmul(c_scaled, b_scaled_t) * causal_mask
-        y_diag = torch.matmul(attn, x)
-        chunk_states = torch.matmul(b_scaled_t, x) * torch.exp(0.5 * total).unsqueeze(-1)
-    else:
-        # masked fallback (mirrors fused_kernel_masked)
-        decay_to_end = torch.exp(total - intra_cumsum)
-        attn = torch.matmul(c_proj, b_proj.transpose(-1, -2)) * decay_intra
-        y_diag = torch.matmul(attn, x)
-        b_decayed = b_proj * decay_to_end.unsqueeze(-1)
-        chunk_states = torch.matmul(b_decayed.transpose(-1, -2), x)
-
-    bh, c, n, p = chunk_states.shape
-    scan_out = torch.matmul(decay_matrix, chunk_states.reshape(bh, c, n * p))
-    if init_state is not None:
-        scan_out = scan_out + init_col * init_state
-    rolled_states = scan_out[:, :c].reshape(bh, c, n, p)
-    y_off = torch.matmul(c_proj, rolled_states) * torch.exp(intra_cumsum).unsqueeze(-1)
-    return y_off + y_diag, scan_out
-
-
-def _build_decay_cpu(chunk_decay, n_bh, n_chunks, dtype):
-    """CPU twin of _build_decay: (BH, C+1, C) scan decay-matrix, same clamp math."""
-    decay_cumsum = torch.cumsum(chunk_decay, dim=-1)
-    decay_before = decay_cumsum - chunk_decay
-    decay_total = decay_cumsum[:, -1:]
-    strict = torch.tril(torch.ones(n_chunks, n_chunks, dtype=torch.bool), -1)
-    outer = decay_before.unsqueeze(-1) - decay_cumsum.unsqueeze(-2)     # (BH, C, C)
-    decay_run = torch.exp(torch.clamp(outer, max=0.0)) * strict.to(outer.dtype)
-    decay_final = torch.exp(decay_total - decay_cumsum).reshape(n_bh, 1, n_chunks)
-    return torch.cat([decay_run, decay_final], dim=1).to(dtype)         # (BH, C+1, C)
-
-
-def _build_intra_decay_cpu(a_flat, n_bh, n_chunks, chunk_len, dtype):
-    """CPU twin of build_intra_decay: (BH, C, L, L) bounded mask, same asymmetric
-    op sequence (g_row pre-expanded, g_col broadcast via unsqueeze(-2))."""
-    g = a_flat.float().cumsum(-1)                                       # (BH,C,L)
-    causal = torch.tril(torch.ones(chunk_len, chunk_len, dtype=torch.bool))
-    g_row = g.unsqueeze(-1).expand(n_bh, n_chunks, chunk_len, chunk_len)  # (BH,C,L,La)
-    g_col = g                                                            # (BH,C,La)
-    outer = g_row - g_col.unsqueeze(-2)                                 # (BH,C,L,La)
-    return (torch.exp(torch.clamp(outer, max=0.0)) * causal.to(g.dtype)).to(dtype)
-
-
+# Compact single-function mirror: runs the SAME op sequence as ssd_spyre on plain
 def ssd_cpu(x, a, b_proj, c_proj, initial_states=None, dtype=torch.float32):
-    """CPU mirror of ``ssd_spyre`` (same ops, same routing, C-pad, rank-1 init)."""
+    """CPU mirror of ``ssd_spyre``. Inputs (B, nheads, C, L, *)."""
     batch, heads, n_chunks, chunk_len, head_dim = x.shape
     state_dim = b_proj.shape[-1]
     n_bh = batch * heads
@@ -282,29 +260,36 @@ def ssd_cpu(x, a, b_proj, c_proj, initial_states=None, dtype=torch.float32):
     a_flat = a.reshape(n_bh, n_chunks, chunk_len).contiguous()
     b_flat = b_proj.reshape(n_bh, n_chunks, chunk_len, state_dim).contiguous()
     c_flat = c_proj.reshape(n_bh, n_chunks, chunk_len, state_dim).contiguous()
+
+    # C-pad to a multiple of the 64-stick with zero chunks (mirrors ssd_spyre).
     elem_stick = 64
     c_real = n_chunks
     if n_chunks % elem_stick != 0:
-        c_pad = ((n_chunks + elem_stick - 1) // elem_stick) * elem_stick
-        pad = c_pad - n_chunks
+        n_chunks = ((n_chunks + elem_stick - 1) // elem_stick) * elem_stick
+        pad = n_chunks - c_real
         x_flat = F.pad(x_flat, (0, 0, 0, 0, 0, pad))
         a_flat = F.pad(a_flat, (0, 0, 0, pad))
         b_flat = F.pad(b_flat, (0, 0, 0, 0, 0, pad))
         c_flat = F.pad(c_flat, (0, 0, 0, 0, 0, pad))
-        n_chunks = c_pad
 
     assert bool((a_flat <= 1e-6).all()), "SSD kernel requires A ≤ 0"
 
     chunk_decay = a_flat.float().sum(-1)                               # (BH, C)
-    x_d = x_flat.to(dtype); a_d = a_flat.to(dtype)
-    b_d = b_flat.to(dtype); c_d = c_flat.to(dtype)
-    cumsum_tri = torch.triu(torch.ones(chunk_len, chunk_len, dtype=dtype))
-    decay_matrix = _build_decay_cpu(chunk_decay, n_bh, n_chunks, dtype)
+    x_d, a_d = x_flat.to(dtype), a_flat.to(dtype)
+    b_d, c_d = b_flat.to(dtype), c_flat.to(dtype)
 
+    # --- scan decay-matrix (BH, C+1, C): exclusive-cumsum outer-difference ---
+    decay_cumsum = torch.cumsum(chunk_decay, dim=-1)                   # (BH, C)
+    decay_before = decay_cumsum - chunk_decay                         # exclusive
+    strict = torch.tril(torch.ones(n_chunks, n_chunks, dtype=torch.bool), -1)
+    dm_outer = decay_before.unsqueeze(-1) - decay_cumsum.unsqueeze(-2)
+    decay_run = torch.exp(torch.clamp(dm_outer, max=0.0)) * strict.to(dtype)
+    decay_final = torch.exp(decay_cumsum[:, -1:] - decay_cumsum).reshape(n_bh, 1, n_chunks)
+    decay_matrix = torch.cat([decay_run, decay_final], dim=1).to(dtype)  # (BH, C+1, C)
+
+    # --- optional non-zero initial state -> rank-1 scan correction ---
     init_state = init_col = None
     if initial_states is not None:
-        decay_cumsum = torch.cumsum(chunk_decay, dim=-1)
-        decay_before = decay_cumsum - chunk_decay
         init_col = torch.exp(
             torch.cat([decay_before, decay_cumsum[:, -1:]], dim=1)
         ).unsqueeze(-1).to(dtype)                                      # (BH, C+1, 1)
@@ -312,17 +297,37 @@ def ssd_cpu(x, a, b_proj, c_proj, initial_states=None, dtype=torch.float32):
             n_bh, head_dim, state_dim).transpose(-1, -2).reshape(
             n_bh, 1, state_dim * head_dim).contiguous().to(dtype)      # (BH, 1, N·P)
 
-    if _intra_decay_factored_safe(chunk_decay):
-        causal_mask = torch.tril(torch.ones(chunk_len, chunk_len, dtype=dtype))
-        y_grouped, scan_out = _ssd_core_cpu(
-            a_d, cumsum_tri, c_d, b_d, x_d, decay_matrix,
-            causal_mask=causal_mask, init_state=init_state, init_col=init_col)
+    # --- intra-chunk (stage 1-2): factored fast path vs bounded masked fallback ---
+    intra_cumsum = torch.matmul(a_d, torch.triu(torch.ones(chunk_len, chunk_len, dtype=dtype)))
+    total = a_d.sum(dim=-1, keepdim=True)                             # (BH, C, 1)
+    if float(chunk_decay.abs().max()) < INTRA_FACTORED_TOTAL_LIMIT:
+        # factored: fold decay into operands (mirrors fused_kernel)
+        shifted = intra_cumsum - 0.5 * total
+        c_scaled = c_d * torch.exp(shifted).unsqueeze(-1)
+        b_scaled_t = (b_d * torch.exp(-shifted).unsqueeze(-1)).transpose(-1, -2)
+        causal = torch.tril(torch.ones(chunk_len, chunk_len, dtype=dtype))
+        y_diag = torch.matmul(torch.matmul(c_scaled, b_scaled_t) * causal, x_d)
+        chunk_states = torch.matmul(b_scaled_t, x_d) * torch.exp(0.5 * total).unsqueeze(-1)
     else:
-        decay_intra = _build_intra_decay_cpu(a_flat, n_bh, n_chunks, chunk_len, dtype)
-        y_grouped, scan_out = _ssd_core_cpu(
-            a_d, cumsum_tri, c_d, b_d, x_d, decay_matrix,
-            decay_intra=decay_intra, init_state=init_state, init_col=init_col)
+        # masked: bounded (BH,C,L,L) decay mask (mirrors fused_kernel_masked)
+        g = a_flat.float().cumsum(-1)                                  # (BH,C,L)
+        g_row = g.unsqueeze(-1).expand(n_bh, n_chunks, chunk_len, chunk_len)
+        decay_intra = (torch.exp(torch.clamp(g_row - g.unsqueeze(-2), max=0.0))
+                       * torch.tril(torch.ones(chunk_len, chunk_len))).to(dtype)
+        y_diag = torch.matmul(torch.matmul(c_d, b_d.transpose(-1, -2)) * decay_intra, x_d)
+        b_decayed = b_d * torch.exp(total - intra_cumsum).unsqueeze(-1)
+        chunk_states = torch.matmul(b_decayed.transpose(-1, -2), x_d)  # (BH, C, N, P)
 
+    # --- inter-chunk scan (stage 3) + off-diagonal combine (stage 4) ---
+    bh, c, n, p = chunk_states.shape
+    scan_out = torch.matmul(decay_matrix, chunk_states.reshape(bh, c, n * p))
+    if init_state is not None:
+        scan_out = scan_out + init_col * init_state                   # (BH,C+1,N·P)
+    rolled_states = scan_out[:, :c].reshape(bh, c, n, p)
+    y_off = torch.matmul(c_d, rolled_states) * torch.exp(intra_cumsum).unsqueeze(-1)
+    y_grouped = y_off + y_diag
+
+    # --- un-fold to (B, T, H, P) + final state to (B, H, P, N), dropping C-pad ---
     final_state = (
         scan_out[:, c_real]
         .reshape(batch, heads, state_dim, head_dim)
@@ -455,10 +460,33 @@ def ssd_spyre(x, a, b_proj, c_proj, initial_states=None, config=None):
     factored = _intra_decay_factored_safe(chunk_decay)
 
     # --- one fused kernel: intra (incl. inline decay) + scan + combine ---
-    # Names must be re-declared right before EACH compile (the registry resets after
-    # every torch.compile). The masked path compiles _build_intra_decay first, which
-    # wipes the registry — so each branch names independently, just before its kernel.
-    if factored:
+    # Names must be re-declared right before EACH compile
+    if factored and SPLIT_SCAN:
+        # SPLIT-SCAN: kernel A (intra) then kernel B (N-blocked scan+combine). B takes
+        # chunk_states/c_scaled as PLAIN INPUTS so it can N-block the scan (avoids the
+        # ~545MB dense intermediate; slicing N-carrying intermediates in one hint group
+        # is backend-blocked). Peak pool = max(A,B) not sum — sequential compiles.
+        _declare_dims(n_chunks, chunk_len)
+        name_tensor_dims(a_dev, ["BH", "C", "Lk"]); name_tensor_dims(cumsum_tri, ["Lk", "L"])
+        name_tensor_dims(c_dev, ["BH", "C", "L", "N"]); name_tensor_dims(b_dev, ["BH", "C", "La", "N"])
+        name_tensor_dims(x_dev, ["BH", "C", "La", "P"])
+        name_tensor_dims(causal_mask, ["L", "La"])
+        y_diag, chunk_states, c_scaled, half_total = torch.compile(
+            fused_kernel_intra, dynamic=False)(
+            a_dev, cumsum_tri, c_dev, b_dev, causal_mask, x_dev)
+        # kernel B — chunk_states/c_scaled are now graph inputs
+        _declare_dims(n_chunks, chunk_len)
+        name_tensor_dims(decay_matrix, ["BH", "Cp", "Ca"])
+        name_tensor_dims(chunk_states, ["BH", "C", "N", "P"])
+        name_tensor_dims(c_scaled, ["BH", "C", "L", "N"])
+        name_tensor_dims(half_total, ["BH", "C", "One"])
+        if init_state is not None:
+            name_tensor_dims(init_col, ["BH", "Cp", "One"])
+            name_tensor_dims(init_state, ["BH", "One", "PN"])
+        y_off, scan_out = torch.compile(scan_combine_kernel, dynamic=False)(
+            decay_matrix, chunk_states, c_scaled, half_total, init_state, init_col)
+        y_grouped = y_off + y_diag
+    elif factored:
         # Fast path: 2 compiles (scan-decay build + this), no L×L mask kernel.
         _declare_dims(n_chunks, chunk_len)
         name_tensor_dims(a_dev, ["BH", "C", "Lk"]); name_tensor_dims(cumsum_tri, ["Lk", "L"])
@@ -524,6 +552,39 @@ def rel_l2(got, ref):
     return (got - ref).norm().item() / (ref.norm().item() + 1e-12)
 
 
+# def validate_long_t(B_=1, T_=16384, H_=2048, P_=64, N_=128):
+#     """Validate the long-sequence policy path on device. MUST run as the only
+#     Spyre compile in the process (see __main__ note) — call it from a fresh
+#     interpreter: `python -c "import test_ssd as m; m.validate_long_t()"`.
+
+#     ``pick_config`` chooses L for this (B,T,H,P,N) (T=16K → L=128, ~14× faster than
+#     L=64), and the SSDConfig drives the kernel. Asserts rel-L2 < 0.05 vs reference.
+#     """
+#     cfg = pick_config(B_, T_, H_, P_, N_)
+#     L_ = cfg.L
+#     # _chunk_inputs and _declare_dims read module globals; set them for this shape.
+#     globals().update(B=B_, T=T_, H=H_, P=P_, N=N_, nheads=H_ // P_, G=1,
+#                      L=L_, C=T_ // L_, BH_TILES=cfg.bh_tiles)
+#     _device_const_cache.clear()
+#     torch.manual_seed(42)
+#     nheads_ = H_ // P_
+#     xr = torch.randn(B_, T_, nheads_, P_)
+#     dt = F.softplus(torch.randn(B_, T_, nheads_) - 4 + torch.randn(nheads_) * 0.1
+#                     ).clamp(0.0, float("inf"))
+#     a_log = -torch.exp(torch.rand(nheads_))
+#     b_raw = torch.randn(B_, T_, 1, N_).repeat_interleave(nheads_, dim=2)
+#     c_raw = torch.randn(B_, T_, 1, N_).repeat_interleave(nheads_, dim=2)
+#     a_raw = dt * a_log
+#     x_dt = xr * dt.unsqueeze(-1)
+#     y_ref, f_ref = ssd_reference(x_dt, a_raw, b_raw, c_raw, L_)
+#     xc, ac, bc, cc = _chunk_inputs(x_dt.half(), a_raw.half(), b_raw.half(), c_raw.half())
+#     y, fs = ssd_spyre(xc, ac, bc, cc, config=cfg)
+#     ey, ef = rel_l2(y.cpu(), y_ref), rel_l2(fs.cpu(), f_ref)
+#     print(f"long-T T={T_} L={L_} C={T_ // L_} (policy):  Y={ey:.4f}  final={ef:.4f}")
+#     assert ey < 0.05 and ef < 0.05, f"long-T failed: Y={ey:.4f} final={ef:.4f}"
+#     print(f"PASSED (long-T: pick_config chose L={L_})")
+
+
 if __name__ == "__main__":
     torch.manual_seed(42)
     x_raw = torch.randn(B, T, nheads, P)                   # pre-discretization input
@@ -561,3 +622,47 @@ if __name__ == "__main__":
     assert err_y < 0.05, f"Y rel-L2 {err_y:.4f} exceeds 0.05 (fp16 budget)"
     assert err_final < 0.05, f"final_state rel-L2 {err_final:.4f} exceeds 0.05"
     print("PASSED (Spyre vs Mamba reference, fp16 relative-L2 tolerance)")
+
+    # --- non-zero initial_states ---
+    # print("\nRunning with non-zero initial_states...")
+    # init_ref = torch.randn(B, 1, nheads, P, N) * 0.5       # ref layout (B,1,H,P,N)
+    # y_ref2, final_ref2 = ssd_reference(x_dt, a_raw, b_raw, c_raw, L, initial_states=init_ref)
+    # init_spyre = init_ref.squeeze(1).half()                # (B, H, P, N) for the driver
+    # y_spyre2, final_spyre2 = ssd_spyre(xd_c, a_c, b_c, c_c, initial_states=init_spyre)
+    # err_y2 = rel_l2(y_spyre2.cpu(), y_ref2)
+    # err_final2 = rel_l2(final_spyre2.cpu(), final_ref2)
+    # print(f"  Y            rel-L2 error = {err_y2:.4f}")
+    # print(f"  final_state  rel-L2 error = {err_final2:.4f}")
+    # assert err_y2 < 0.05, f"init_states Y rel-L2 {err_y2:.4f} exceeds 0.05"
+    # assert err_final2 < 0.05, f"init_states final_state rel-L2 {err_final2:.4f} exceeds 0.05"
+    # print("PASSED (non-zero initial_states)")
+
+    # # --- C < 64 config: exercise the zero-chunk C-PADDING branch ---
+    # print("\nRunning C<64 config (T small -> C=32, exercises C-padding)...")
+    # T2, L2 = 2048, 64                                      # C = 2048//64 = 32 < 64
+    # globals()["T"], globals()["L"], globals()["C"] = T2, L2, T2 // L2
+    # globals()["BH_TILES"] = next(t for t in [4, 2, 1] if (B * nheads) % t == 0)
+    # _device_const_cache.clear()   # shapes changed across configs; drop stale consts
+    # xr = torch.randn(B, T2, nheads, P)
+    # dt2 = F.softplus(torch.randn(B, T2, nheads) - 4 + dt_bias).clamp(dt_min, dt_max)
+    # b2 = torch.randn(B, T2, G, N).repeat_interleave(nheads // G, dim=2)
+    # c2 = torch.randn(B, T2, G, N).repeat_interleave(nheads // G, dim=2)
+    # a2 = dt2 * a_log
+    # xdt2 = xr * dt2.unsqueeze(-1)
+    # yr3, fr3 = ssd_reference(xdt2, a2, b2, c2, L2)
+    # xc3, ac3, bc3, cc3 = _chunk_inputs(xdt2.half(), a2.half(), b2.half(), c2.half())
+    # ys3, fs3 = ssd_spyre(xc3, ac3, bc3, cc3)
+    # ey3, ef3 = rel_l2(ys3.cpu(), yr3), rel_l2(fs3.cpu(), fr3)
+    # print(f"  C=32 (padded to 64):  Y={ey3:.4f}  final={ef3:.4f}")
+    # assert ey3 < 0.05, f"C<64 Y rel-L2 {ey3:.4f} exceeds 0.05"
+    # assert ef3 < 0.05, f"C<64 final_state rel-L2 {ef3:.4f} exceeds 0.05"
+    # print("PASSED (C<64 zero-chunk padding path)")
+
+    # # Long-sequence validation (pick_config → L=128 at T=16K) is NOT run here: the
+    # # Spyre backend (dxp_standalone) accumulates in-process compile state, so a 5th
+    # # shape-varying device compile after the four above SIGABRTs ("Immediate value
+    # # out of boundary") even though the same config compiles cleanly in a fresh
+    # # process (verified Y=0.0047). Run it standalone in its OWN process:
+    # #     python -c "import test_ssd as m; m.validate_long_t()"
+    # print("\n(Long-T config not run in-process — one Spyre compile per process; "
+    #       "run `python -c 'import test_ssd as m; m.validate_long_t()'`.)")

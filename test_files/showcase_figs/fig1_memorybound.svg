@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="440" viewBox="0 0 920 440" font-family="system-ui,-apple-system,'Segoe UI',sans-serif">
+  <rect width="920" height="440" fill="#ffffff"/>
+  <text x="60" y="66" font-size="30" font-weight="700" fill="#0b0b0b">The kernel is memory-bound, not compute-bound</text>
+  <text x="60" y="102" font-size="18" fill="#52514e">The arithmetic is essentially free — moving data into the right layout is the entire cost.</text>
+
+  <!-- scale: log-ish, just two bars for contrast. compute tiny vs runtime huge -->
+  <!-- baseline -->
+  <line x1="230" y1="360" x2="860" y2="360" stroke="#c3c2b7" stroke-width="2"/>
+
+  <!-- compute bar (74us) -->
+  <text x="210" y="250" font-size="16" fill="#52514e" text-anchor="end">Compute</text>
+  <rect x="230" y="352" width="14" height="8" rx="3" fill="#199e70"/>
+  <text x="252" y="345" font-size="16" font-weight="700" fill="#199e70">~74 microseconds</text>
+  <text x="252" y="366" font-size="13" fill="#898781">the actual math</text>
+
+  <!-- runtime bar (20ms) -->
+  <text x="210" y="200" font-size="16" fill="#52514e" text-anchor="end">Runtime</text>
+  <rect x="230" y="150" width="580" height="60" rx="6" fill="#d95926"/>
+  <text x="820" y="188" font-size="22" font-weight="700" fill="#ffffff" text-anchor="end">~20 milliseconds</text>
+  <text x="230" y="140" font-size="13" fill="#898781">total device time — dominated by data movement (layout conversions)</text>
+
+  <!-- callout -->
+  <text x="230" y="410" font-size="17" fill="#0b0b0b">Compute is <tspan font-weight="700">under 1%</tspan> of runtime → every optimization targeted <tspan font-weight="700" fill="#d95926">data movement</tspan>, not math.</text>
+</svg>

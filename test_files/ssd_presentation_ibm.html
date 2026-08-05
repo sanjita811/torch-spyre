@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSD Kernel on Spyre — IBM Review</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --plane:#ffffff; --surface:#f4f4f4; --surface-2:#e8e8e8;
+    --ink:#161616;      /* Carbon gray-100 */
+    --ink-2:#525252;    /* gray-70 */
+    --muted:#6f6f6f;    /* gray-60 */
+    --line:#e0e0e0;     /* gray-20 */
+    --line-2:#c6c6c6;   /* gray-30 */
+    --ibm:#0f62fe;      /* IBM Blue 60 — accent */
+    --ibm-dk:#0043ce;
+    /* chart series — pre-validated CVD-safe (light surface) */
+    --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100;
+    --good:#198038; --warn:#8a6a00; --crit:#da1e28;
+    --sans:'IBM Plex Sans', system-ui,-apple-system,'Segoe UI',sans-serif;
+    --mono:'IBM Plex Mono', ui-monospace, monospace;
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  html,body{height:100%}
+  body{background:var(--plane); color:var(--ink); font-family:var(--sans);
+       overflow:hidden; -webkit-font-smoothing:antialiased}
+  .deck{position:relative; width:100vw; height:100vh}
+  .slide{position:absolute; inset:0; display:none; flex-direction:column;
+         padding:6vh 6.5vw 8vh; opacity:0; transition:opacity .2s ease}
+  .slide.active{display:flex; opacity:1}
+  /* IBM 8-bar logo, bottom-left */
+  .ibmlogo{position:absolute; bottom:3vh; left:6.5vw; display:flex; gap:2px; align-items:flex-end}
+  .ibmlogo .bars{display:flex; flex-direction:column; gap:2px}
+  .ibmlogo .row{display:flex; gap:2px}
+  .ibmlogo b{display:block; width:7px; height:3px; background:var(--ink)}
+  .ibmlogo .txt{font-weight:700; font-size:13px; letter-spacing:.02em; color:var(--ink); margin-left:1px}
+  h1{font-size:clamp(30px,4.6vw,64px); font-weight:600; line-height:1.04; letter-spacing:-0.02em; color:var(--ink)}
+  h2{font-size:clamp(24px,3.1vw,44px); font-weight:600; letter-spacing:-0.015em; margin-bottom:2.6vh; color:var(--ink)}
+  h2 .k{color:var(--ibm)}
+  .kicker{font-size:clamp(12px,1.05vw,14px); font-weight:600; letter-spacing:.02em;
+          color:var(--ibm); margin-bottom:1.8vh}
+  .kicker::before{content:""; display:inline-block; width:20px; height:2px; background:var(--ibm);
+    vertical-align:middle; margin-right:10px; margin-bottom:3px}
+  p,li{font-size:clamp(15px,1.5vw,21px); line-height:1.5; color:var(--ink-2)}
+  .lead{font-size:clamp(17px,1.85vw,25px); color:var(--ink-2); max-width:54ch; font-weight:400}
+  strong{color:var(--ink); font-weight:600}
+  code{font-family:var(--mono); font-size:.9em; color:var(--ink-2)}
+  ul{list-style:none; display:flex; flex-direction:column; gap:1.5vh; margin-top:1vh}
+  ul li{position:relative; padding-left:24px}
+  ul li::before{content:""; position:absolute; left:0; top:.6em; width:8px; height:8px; background:var(--ibm)}
+  ul li.o::before{background:var(--s2)} ul li.a::before{background:var(--s3)}
+  .cols{display:grid; grid-template-columns:1fr 1fr; gap:4vw; flex:1; align-items:start; min-height:0}
+  .cols.center{align-items:center}
+  .footer{position:absolute; bottom:3vh; right:6.5vw; font-size:12px; color:var(--muted);
+    letter-spacing:.02em; font-variant-numeric:tabular-nums}
+  .progress{position:absolute; top:0; left:0; height:3px; background:var(--ibm); transition:width .2s}
+  /* stat tiles — Carbon-flat, hairline border, no radius */
+  .tiles{display:grid; grid-template-columns:repeat(4,1fr); gap:1.4vw; margin-top:1vh}
+  .tile{background:var(--surface); border-left:3px solid var(--ibm); padding:2.4vh 1.4vw}
+  .tile .v{font-size:clamp(26px,3.4vw,46px); font-weight:600; color:var(--ink); line-height:1}
+  .tile .l{font-size:clamp(12px,1.05vw,14px); color:var(--muted); margin-top:1.2vh; line-height:1.4}
+  .tile .v.blue{color:var(--ibm)} .tile .v.green{color:var(--good)} .tile .v.orange{color:var(--s2)}
+  .card{background:var(--surface); padding:2.6vh 1.7vw; border-top:3px solid var(--line-2)}
+  .card.accent{border-top-color:var(--ibm)}
+  .card h3{font-size:clamp(15px,1.45vw,20px); color:var(--ink); font-weight:600; margin-bottom:1.2vh}
+  .chip{display:inline-block; font-size:12px; font-weight:500; padding:4px 11px; border-radius:0;
+        background:var(--surface); border:1px solid var(--line-2); color:var(--ink-2); margin:0 6px 7px 0}
+  .chip.g{color:var(--good); border-color:#a7e0b4} .chip.w{color:var(--warn); border-color:#e6d08a}
+  .chip.c{color:var(--crit); border-color:#f0b3b6}
+  .title-wrap{flex:1; display:flex; flex-direction:column; justify-content:center; max-width:74%}
+  .title-sub{margin-top:2.6vh; font-size:clamp(15px,1.65vw,22px); color:var(--muted); max-width:56ch}
+  .legend{display:flex; gap:1.6vw; margin-top:1.4vh; flex-wrap:wrap}
+  .legend span{display:inline-flex; align-items:center; gap:7px; font-size:13px; color:var(--ink-2)}
+  .legend i{width:11px; height:11px; display:inline-block}
+  .note{font-size:clamp(12px,1.05vw,14px); color:var(--muted); margin-top:1.4vh; line-height:1.45}
+  .big{font-size:clamp(30px,4vw,52px); font-weight:600; color:var(--ink); line-height:1.12; letter-spacing:-0.02em}
+  .big .hl{color:var(--ibm)}
+  .flow{display:flex; align-items:stretch; gap:0; flex-wrap:wrap; margin-top:2vh}
+  .step{background:var(--surface); border-top:3px solid var(--ibm); padding:1.8vh 1.1vw; text-align:left; flex:1; min-width:0}
+  .step .n{font-size:11px; color:var(--ibm); font-weight:600; letter-spacing:.06em}
+  .step .t{font-size:clamp(13px,1.2vw,17px); color:var(--ink); font-weight:600; margin-top:.6vh}
+  .step .d{font-size:clamp(11px,1vw,13px); color:var(--muted); margin-top:.4vh; line-height:1.3}
+  .arrow{color:var(--line-2); font-size:22px; padding:0 .5vw; flex:0 0 auto; align-self:center}
+  .hint{position:absolute; bottom:3vh; left:50%; transform:translateX(-50%); font-size:11px; color:var(--line-2)}
+</style>
+</head>
+<body>
+<div class="deck" id="deck">
+
+<!-- 1 TITLE -->
+<section class="slide active">
+  <div class="title-wrap">
+    <div class="kicker">TORCH-SPYRE · PROJECT REVIEW</div>
+    <h1>Bringing State-Space Models<br>to the Spyre Accelerator</h1>
+    <div class="title-sub">A production Mamba-2 SSD kernel, running fully on-device —
+      the first structured-state-space sequence model on Spyre.</div>
+    <div class="legend" style="margin-top:4vh">
+      <span><i style="background:var(--s1)"></i> Correctness validated vs. reference</span>
+      <span><i style="background:var(--s2)"></i> Optimized &amp; profiled on-card</span>
+      <span><i style="background:var(--s3)"></i> Sequence length up to 32K</span>
+    </div>
+  </div>
+</section>
+
+<!-- 2 WHY -->
+<section class="slide">
+  <div class="kicker">THE GOAL</div>
+  <h2>Why <span class="k">state-space models</span> matter</h2>
+  <div class="cols center">
+    <div>
+      <p class="lead">Mamba-2 is a leading alternative to the Transformer. It processes
+      long sequences in <strong>linear time</strong> instead of quadratic — a structural
+      advantage for long-context AI.</p>
+      <ul style="margin-top:3vh">
+        <li>Transformer cost grows with the <strong>square</strong> of sequence length</li>
+        <li class="o">SSMs stay <strong>linear</strong> — cheaper as context grows</li>
+        <li class="a">Increasingly used in frontier long-context &amp; efficiency work</li>
+      </ul>
+    </div>
+    <div>
+      <div class="card accent">
+        <h3>The business case</h3>
+        <p>For Spyre to be a credible platform for modern AI, it must run the
+        architectures customers actually want to deploy — not only Transformers.</p>
+        <p style="margin-top:1.6vh"><strong>This project proves SSMs run on Spyre</strong>,
+        and turns the accelerator's constraints into a concrete backend roadmap.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 3 CHALLENGE -->
+<section class="slide">
+  <div class="kicker">THE CHALLENGE</div>
+  <h2>Spyre is <span class="k">not a GPU</span></h2>
+  <div class="cols center">
+    <div>
+      <p class="lead">Spyre is a tiled, memory-oriented accelerator. Getting an SSM to run
+      well means respecting hardware rules a GPU never imposes.</p>
+      <ul style="margin-top:2.6vh">
+        <li>Data laid out in <strong>128-byte blocks</strong> — every reshape has a cost</li>
+        <li class="o">No native <strong>cumulative-sum</strong>, no native attention op</li>
+        <li class="a">Per-core memory <strong>limits</strong> bound how big any tensor can be</li>
+        <li>Half-precision throughout — <strong>overflow</strong> is a real constraint</li>
+      </ul>
+    </div>
+    <div>
+      <div class="card">
+        <h3>The reference is GPU-shaped</h3>
+        <p>The canonical Mamba-2 kernel is written for GPUs: giant fused operations,
+        large chunk size, cumulative-sums everywhere.</p>
+        <p style="margin-top:1.6vh"><strong>None of it maps directly.</strong> The work was
+        re-deriving the same math as Spyre-legal operations — and finding where the
+        hardware pushes back.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 4 APPROACH -->
+<section class="slide">
+  <div class="kicker">THE APPROACH</div>
+  <h2>Decompose the algorithm into <span class="k">Spyre-legal matmuls</span></h2>
+  <p class="lead" style="max-width:66ch">The SSD algorithm splits a long sequence into chunks.
+  Each stage — written as one big operation in the reference — becomes a chain of batched
+  matrix multiplies with the decay folded into the operands.</p>
+  <div class="flow">
+    <div class="step"><div class="n">STAGE 1</div><div class="t">Intra-chunk</div><div class="d">Local mixing within each chunk</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">STAGE 2</div><div class="t">Chunk states</div><div class="d">Summarize each chunk to a state</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">STAGE 3</div><div class="t">Inter-chunk scan</div><div class="d">Carry state across chunks</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">STAGE 4</div><div class="t">Combine</div><div class="d">Merge local + carried into output</div></div>
+  </div>
+  <div class="cols" style="flex:0; margin-top:3vh; gap:3vw">
+    <p class="note"><strong style="color:var(--ibm)">Key techniques:</strong> cumulative-sum as a
+    matrix multiply · decay folded into operands (no giant intermediate) · numerically-centered
+    exponentials for half-precision safety · the whole thing fused into <strong>one compiled kernel</strong>.</p>
+    <p class="note"><strong style="color:var(--s2)">Design principle:</strong> the kernel is
+    model-agnostic — it computes <code>Y = SSM(X,A,B,C)</code> only. Projections, gating, and
+    normalization belong to the model layer, so the kernel is reusable across any SSM.</p>
+  </div>
+</section>
+
+<!-- 5 TESTING -->
+<section class="slide">
+  <div class="kicker">TESTING &amp; VALIDATION</div>
+  <h2>A <span class="k">CPU twin</span> separates "our math" from "the backend"</h2>
+  <div class="cols center">
+    <div>
+      <ul>
+        <li><strong>Reference oracle:</strong> the verbatim Mamba-2 kernel on CPU as ground truth</li>
+        <li class="o"><strong>CPU mirror:</strong> the exact same op-sequence as our kernel, in plain PyTorch — pinpoints whether a bug is in <em>our formulation</em> or <em>the hardware</em></li>
+        <li class="a"><strong>Device-faithful oracle:</strong> a half-precision model that predicts Spyre behavior <em>without</em> a compile — so we tune correctness cheaply</li>
+      </ul>
+      <p class="note">Acceptance metric: relative-L2 error &lt; 0.05 — the realistic half-precision budget.</p>
+    </div>
+    <div>
+      <div class="tiles" style="grid-template-columns:1fr 1fr">
+        <div class="tile"><div class="v green">4e&#8209;4</div><div class="l">fp32 formulation error — math matches reference exactly</div></div>
+        <div class="tile"><div class="v blue">9e&#8209;4</div><div class="l">fp16 numerical floor — best achievable in half precision</div></div>
+        <div class="tile"><div class="v">0.0038</div><div class="l">On-device error at default config — near the floor</div></div>
+        <div class="tile"><div class="v">&lt; 0.05</div><div class="l">Every validated shape stays within budget</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 6 ACCOMPLISHMENTS -->
+<section class="slide">
+  <div class="kicker">ACCOMPLISHMENTS</div>
+  <h2>What works today</h2>
+  <div class="tiles">
+    <div class="tile"><div class="v green">100%</div><div class="l">On-device — full kernel runs on Spyre, no CPU fallback in the hot path</div></div>
+    <div class="tile"><div class="v blue">32K</div><div class="l">Max sequence length validated correct on-card</div></div>
+    <div class="tile"><div class="v">1</div><div class="l">Fused kernel — intra + scan + combine in a single graph</div></div>
+    <div class="tile"><div class="v orange">~2&times;</div><div class="l">Kernel speedup from the factored-decay redesign</div></div>
+  </div>
+  <div style="margin-top:3vh">
+    <span class="chip g">Fully fused single kernel</span>
+    <span class="chip g">Accuracy at the fp16 floor</span>
+    <span class="chip g">Auto-tuned config per sequence length</span>
+    <span class="chip g">Streaming initial-state supported</span>
+    <span class="chip g">Numerically-safe fallback for large chunks</span>
+    <span class="chip g">Reusable across SSM models</span>
+  </div>
+  <p class="note" style="margin-top:2.6vh">First structured-state-space model kernel to run on Spyre —
+  from a GPU-only reference to a validated, tuned, on-device implementation.</p>
+</section>
+
+<!-- 7 PROFILING -->
+<section class="slide">
+  <div class="kicker">PROFILING</div>
+  <h2>The kernel is <span class="k">memory-bound</span>, not compute-bound</h2>
+  <div class="cols center">
+    <div>
+      <p class="lead">Deep profiling gave the single most important insight of the project:
+      the math is nearly free — <strong>moving data is the entire cost.</strong></p>
+      <div class="big" style="margin-top:3vh">Ideal compute: <span class="hl">~17 µs</span></div>
+      <div class="big">Runtime: <span style="color:var(--s2)">milliseconds</span></div>
+      <p class="note" style="margin-top:2vh">Ideal matrix-multiply work is ~17 µs (the compiler's own
+      cycle model). The kernel runs orders of magnitude longer — <strong>the gap is entirely data
+      movement</strong>, laying tensors out in the right orientation
+      between operations.</p>
+    </div>
+    <div>
+      <div class="card accent">
+        <h3>Why this matters strategically</h3>
+        <p>It redirected the entire optimization effort. Chasing compute utilization would
+        have been wasted work.</p>
+        <p style="margin-top:1.4vh"><strong>Every real win came from cutting data movement</strong> —
+        fewer layout conversions, smaller intermediates, sharing tensors across operations.</p>
+        <p style="margin-top:1.4vh">It also tells the backend team exactly where the leverage is:
+        keeping data resident on-chip.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 8 OPTIMIZATIONS -->
+<section class="slide">
+  <div class="kicker">OPTIMIZATIONS</div>
+  <h2>Every win cut <span class="k">data movement</span></h2>
+  <div class="cols" style="align-items:start">
+    <div>
+      <ul>
+        <li><strong>Factored decay:</strong> fold decay into operands instead of a giant per-chunk
+          matrix — killed a 34&nbsp;MB intermediate, <strong>~2&times; faster</strong></li>
+        <li class="o"><strong>Shared layouts:</strong> reuse one prepared tensor across two matmuls —
+          measured to the minimum number of layout conversions</li>
+        <li class="a"><strong>Asymmetric mask build:</strong> broadcast one operand in-kernel instead of
+          shipping it — <strong>halved</strong> a 268&nbsp;MB transfer to 134&nbsp;MB</li>
+        <li><strong>Tiling sweep:</strong> measured the optimal core-tiling on-card —
+          <strong>~34% faster</strong> than the previous default</li>
+      </ul>
+    </div>
+    <div>
+      <div class="card">
+        <h3>Rigor over intuition</h3>
+        <p>A recurring lesson: on this hardware, <strong>counting operations does not predict
+        speed</strong> — a "cheaper-looking" layout can be slower.</p>
+        <p style="margin-top:1.4vh">So every optimization was <strong>measured on-device</strong>, and
+        several plausible ideas were <em>rejected</em> when the hardware disagreed. Negative results
+        were recorded so they aren't re-tried.</p>
+      </div>
+      <p class="note">Default-config error held at 0.0038 through every optimization.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 9 L SWEEP -->
+<section class="slide">
+  <div class="kicker">OPTIMIZATION · MEASURED</div>
+  <h2>Finding: GPU's chunk size is <span class="k">wrong</span> for Spyre</h2>
+  <div class="cols center">
+    <div>
+      <p class="lead">GPUs use a large chunk size (256). On memory-bound Spyre, the
+      <strong>smallest</strong> chunk is fastest — the opposite conclusion.</p>
+      <div id="chart-lsweep" style="margin-top:2vh"></div>
+      <p class="note">Default sequence length (4,096). Lower is faster. Measured on-card.</p>
+    </div>
+    <div>
+      <div class="card">
+        <h3>Why smaller wins</h3>
+        <p>The within-chunk work grows with the <strong>square</strong> of chunk size. Because the
+        kernel is memory-bound, that intermediate dominates — the smallest legal chunk moves
+        the least data.</p>
+        <p style="margin-top:1.4vh"><strong>Takeaway:</strong> hardware-specific tuning beats
+        porting GPU defaults. We ship a measured best-config per sequence length.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 10 ENVELOPE -->
+<section class="slide">
+  <div class="kicker">LONG-CONTEXT ENVELOPE</div>
+  <h2>Correct &amp; running up to <span class="k">32K tokens</span></h2>
+  <div class="cols center">
+    <div>
+      <div id="chart-env" style="margin-top:1vh"></div>
+      <div class="legend">
+        <span><i style="background:var(--good)"></i> Validated on-device</span>
+        <span><i style="background:var(--crit)"></i> Backend-limited</span>
+      </div>
+    </div>
+    <div>
+      <p class="lead">The maximum sequence length <strong>doubled this cycle</strong> — from 16K to
+      32K — by re-measuring a hardware limit against the latest backend.</p>
+      <ul style="margin-top:2.2vh">
+        <li>Each length uses its own measured-best chunk size</li>
+        <li class="o">Error stays within budget across the whole range</li>
+        <li class="a"><strong>64K+</strong> is blocked by a specific, identified backend limitation — not by our math</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 11 FUTURE -->
+<section class="slide">
+  <div class="kicker">FUTURE WORK</div>
+  <h2>One backend fix unlocks <span class="k">the next frontier</span></h2>
+  <div class="cols center">
+    <div>
+      <p class="lead">Beyond 32K, one tensor grows past the per-core memory limit. The
+      algorithmic fix is known and CPU-validated — it needs one backend capability.</p>
+      <ul style="margin-top:2.4vh">
+        <li><strong>Sub-quadratic scan</strong> — validated correct on CPU; the math is ready</li>
+        <li class="o"><strong>The blocker:</strong> reshaping a tensor into blocks corrupts its layout on-device</li>
+        <li class="a"><strong>The ask:</strong> correct layout handling across a splitting reshape — one well-scoped capability</li>
+      </ul>
+    </div>
+    <div>
+      <div class="card accent">
+        <h3>Turning a kernel into a roadmap</h3>
+        <p>This project produced a prioritized list of <strong>backend capabilities</strong>,
+        each with a minimal reproducer and a clear payoff:</p>
+        <div style="margin-top:1.4vh">
+          <span class="chip c">Splitting-reshape layout → unlocks 64K+</span>
+          <span class="chip w">On-chip residency → cuts the memory tax</span>
+          <span class="chip w">Layout-sharing across ops → general speedup</span>
+        </div>
+        <p class="note" style="margin-top:1.6vh">Each fix helps not just SSMs, but any
+        memory-bound model on Spyre.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 12 IMPACT -->
+<section class="slide">
+  <div class="kicker">IMPACT &amp; LONG-TERM GOAL</div>
+  <h2>From one kernel to a <span class="k">platform capability</span></h2>
+  <div class="cols">
+    <div>
+      <div class="card accent" style="margin-bottom:2.4vh">
+        <h3>Impact today</h3>
+        <ul style="margin-top:.5vh">
+          <li>SSMs are <strong>proven viable</strong> on Spyre</li>
+          <li class="o">A validated, tuned, reusable kernel other SSM models build on</li>
+          <li class="a">A concrete, evidence-backed backend roadmap</li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <h3>Long-term goal</h3>
+        <ul style="margin-top:.5vh">
+          <li><strong>Full Mamba-2 layer</strong> — projections, conv, norm, and the decode step</li>
+          <li class="o">End-to-end <strong>SSM inference</strong> for long-context serving</li>
+          <li class="a">Backend fixes that speed up the whole platform for memory-bound models</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="flow" style="margin-top:1vh">
+    <div class="step"><div class="n">DONE</div><div class="t">SSD core kernel</div><div class="d">On-device, tuned, 32K</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">NEXT</div><div class="t">Full layer</div><div class="d">proj · conv · norm · gate</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">THEN</div><div class="t">Decode step</div><div class="d">recurrent inference</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">GOAL</div><div class="t">SSM serving</div><div class="d">long-context, on Spyre</div></div>
+  </div>
+</section>
+
+<!-- 13 CLOSE -->
+<section class="slide">
+  <div class="title-wrap">
+    <div class="kicker">SUMMARY</div>
+    <h1>SSMs run on Spyre —<br>correct, tuned, up to 32K.</h1>
+    <div class="cols" style="margin-top:4vh; flex:0">
+      <p class="lead">We took a GPU-only architecture, re-derived it for Spyre's constraints,
+      validated it to the precision floor, and optimized it to its memory-bound ceiling.</p>
+      <p class="lead">The path to full SSM serving is clear — and the backend work it needs is
+      identified, reproduced, and prioritized.</p>
+    </div>
+    <div class="legend" style="margin-top:4vh">
+      <span><i style="background:var(--ibm)"></i> Thank you</span>
+      <span style="color:var(--muted)">Questions welcome</span>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<div class="progress" id="prog"></div>
+<div class="ibmlogo" aria-label="IBM">
+  <div class="bars">
+    <div class="row"><b></b><b></b><b></b><b></b><b></b><b></b><b></b></div>
+    <div class="row"><b></b><b></b><b></b><b></b><b></b><b></b><b></b></div>
+    <div class="row"><b></b><b></b><b></b><b></b><b></b><b></b><b></b></div>
+    <div class="row"><b></b><b></b><b></b><b></b><b></b><b></b><b></b></div>
+    <div class="row"><b></b><b></b><b></b><b></b><b></b><b></b><b></b></div>
+    <div class="row"><b></b><b></b><b></b><b></b><b></b><b></b><b></b></div>
+    <div class="row"><b></b><b></b><b></b><b></b><b></b><b></b><b></b></div>
+  </div>
+  <span class="txt">IBM</span>
+</div>
+<div class="footer"><span id="counter">1 / 13</span></div>
+<div class="hint">← → or Space · F fullscreen</div>
+
+<script>
+const slides=[...document.querySelectorAll('.slide')];
+let i=0;
+function show(n){
+  i=Math.max(0,Math.min(slides.length-1,n));
+  slides.forEach((s,k)=>s.classList.toggle('active',k===i));
+  document.getElementById('counter').textContent=`${i+1} / ${slides.length}`;
+  document.getElementById('prog').style.width=`${(i+1)/slides.length*100}%`;
+  if(slides[i].querySelector('#chart-lsweep')) drawLsweep();
+  if(slides[i].querySelector('#chart-env')) drawEnv();
+}
+addEventListener('keydown',e=>{
+  if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){show(i+1);e.preventDefault();}
+  else if(e.key==='ArrowLeft'||e.key==='PageUp'){show(i-1);}
+  else if(e.key==='Home'){show(0);} else if(e.key==='End'){show(slides.length-1);}
+  else if(e.key==='f'||e.key==='F'){document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen();}
+});
+addEventListener('click',e=>{ if(e.target.closest('a'))return; show(i+1); });
+
+const INK='#161616', MUT='#6f6f6f', GRID='#e0e0e0', BASE='#c6c6c6';
+function bars(el,data,opts){
+  const w=560,h=300,pl=54,pr=20,pt=16,pb=48;
+  const max=Math.max(...data.map(d=>d.v))*1.12;
+  const bw=(w-pl-pr)/data.length*0.56, gap=(w-pl-pr)/data.length;
+  let s=`<svg viewBox="0 0 ${w} ${h}" width="100%" style="max-width:600px">`;
+  for(let g=0;g<=4;g++){const y=pt+(h-pt-pb)*g/4; const val=Math.round(max*(4-g)/4);
+    s+=`<line x1="${pl}" y1="${y}" x2="${w-pr}" y2="${y}" stroke="${GRID}" stroke-width="1"/>`;
+    s+=`<text x="${pl-8}" y="${y+4}" fill="${MUT}" font-size="12" text-anchor="end" style="font-variant-numeric:tabular-nums">${val}</text>`;}
+  data.forEach((d,k)=>{
+    const x=pl+gap*k+(gap-bw)/2, bh=(h-pt-pb)*(d.v/max), y=h-pb-bh;
+    s+=`<rect x="${x}" y="${y}" width="${bw}" height="${bh}" fill="${d.c}"/>`;
+    s+=`<text x="${x+bw/2}" y="${y-8}" fill="${INK}" font-size="14" font-weight="600" text-anchor="middle" style="font-variant-numeric:tabular-nums">${d.v}</text>`;
+    s+=`<text x="${x+bw/2}" y="${h-pb+20}" fill="#525252" font-size="13" text-anchor="middle">${d.l}</text>`;
+    if(d.l2)s+=`<text x="${x+bw/2}" y="${h-pb+37}" fill="${MUT}" font-size="11" text-anchor="middle">${d.l2}</text>`;
+  });
+  s+=`<text x="${pl-38}" y="${pt+(h-pt-pb)/2}" fill="${MUT}" font-size="12" transform="rotate(-90 ${pl-38} ${pt+(h-pt-pb)/2})" text-anchor="middle">${opts.yl}</text>`;
+  s+='</svg>'; el.innerHTML=s;
+}
+let lDrawn=false;
+function drawLsweep(){ if(lDrawn)return; lDrawn=true;
+  bars(document.getElementById('chart-lsweep'),[
+    {l:'chunk 64',l2:'(best)',v:928,c:'#2a78d6'},
+    {l:'chunk 128',v:1777,c:'#eb6834'},
+    {l:'chunk 256',l2:'(GPU default)',v:4402,c:'#eda100'},
+  ],{yl:'runtime (ms) — lower is better'});
+}
+let eDrawn=false;
+function drawEnv(){ if(eDrawn)return; eDrawn=true;
+  const el=document.getElementById('chart-env');
+  const rows=[{l:'4K',v:0.0039,ok:1},{l:'8K',v:0.0047,ok:1},{l:'16K',v:0.0057,ok:1},{l:'32K',v:0.0109,ok:1},{l:'64K',v:null,ok:0}];
+  const w=560,h=300,pl=54,pr=20,pb=48,top=16, budget=0.05, max=0.05*1.12;
+  const gap=(w-pl-pr)/rows.length, bw=gap*0.5;
+  let s=`<svg viewBox="0 0 ${w} ${h}" width="100%" style="max-width:600px">`;
+  for(let g=0;g<=5;g++){const y=top+(h-top-pb)*g/5; const val=(max*(5-g)/5).toFixed(3);
+    s+=`<line x1="${pl}" y1="${y}" x2="${w-pr}" y2="${y}" stroke="${GRID}" stroke-width="1"/>`;
+    s+=`<text x="${pl-8}" y="${y+4}" fill="${MUT}" font-size="11" text-anchor="end" style="font-variant-numeric:tabular-nums">${val}</text>`;}
+  const by=top+(h-top-pb)*(1-budget/max);
+  s+=`<line x1="${pl}" y1="${by}" x2="${w-pr}" y2="${by}" stroke="#8a6a00" stroke-width="2" stroke-dasharray="5 4"/>`;
+  s+=`<text x="${w-pr}" y="${by-6}" fill="#8a6a00" font-size="11" text-anchor="end">budget 0.05</text>`;
+  rows.forEach((d,k)=>{
+    const x=pl+gap*k+(gap-bw)/2;
+    if(d.ok){const bh=(h-top-pb)*(d.v/max), y=h-pb-bh;
+      s+=`<rect x="${x}" y="${y}" width="${bw}" height="${bh}" fill="#198038"/>`;
+      s+=`<text x="${x+bw/2}" y="${y-8}" fill="${INK}" font-size="13" font-weight="600" text-anchor="middle" style="font-variant-numeric:tabular-nums">${d.v.toFixed(4)}</text>`;
+    } else {const y=h-pb-70;
+      s+=`<rect x="${x}" y="${y}" width="${bw}" height="70" fill="none" stroke="#da1e28" stroke-width="1.5" stroke-dasharray="4 4"/>`;
+      s+=`<text x="${x+bw/2}" y="${y+40}" fill="#da1e28" font-size="18" text-anchor="middle">&#10007;</text>`;}
+    s+=`<text x="${x+bw/2}" y="${h-pb+20}" fill="#525252" font-size="13" text-anchor="middle">${d.l}</text>`;
+  });
+  s+=`<text x="${pl-38}" y="${top+(h-top-pb)/2}" fill="${MUT}" font-size="12" transform="rotate(-90 ${pl-38} ${top+(h-top-pb)/2})" text-anchor="middle">error (rel-L2)</text>`;
+  s+=`<text x="${pl+(w-pl-pr)/2}" y="${h-6}" fill="${MUT}" font-size="12" text-anchor="middle">sequence length</text>`;
+  s+='</svg>'; el.innerHTML=s;
+}
+show(0);
+</script>
+</body>
+</html>

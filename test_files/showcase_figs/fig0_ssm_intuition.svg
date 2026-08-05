@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="500" viewBox="0 0 960 500" font-family="system-ui,-apple-system,'Segoe UI',sans-serif">
+  <rect width="960" height="500" fill="#ffffff"/>
+  <text x="60" y="58" font-size="30" font-weight="700" fill="#0b0b0b">A State Space Model reads a sequence one step at a time</text>
+  <text x="60" y="94" font-size="18" fill="#52514e">It carries a running <tspan font-weight="700" fill="#199e70">state</tspan> &#8212; a compressed memory of everything seen so far &#8212; and updates it at each token.</text>
+
+  <!-- state flow arrow (the memory highway) -->
+  <line x1="90" y1="210" x2="880" y2="210" stroke="#199e70" stroke-width="3"/>
+  <polygon points="880,210 866,203 866,217" fill="#199e70"/>
+  <text x="90" y="185" font-size="15" font-weight="700" fill="#199e70">state h  (the model's memory, carried forward)</text>
+
+  <!-- 5 steps -->
+  <!-- step template positions -->
+  <g>
+    <!-- state boxes on the highway -->
+    <rect x="130" y="188" width="46" height="44" rx="8" fill="#199e70"/>
+    <text x="153" y="216" font-size="17" font-weight="700" fill="#ffffff" text-anchor="middle">h&#8321;</text>
+    <rect x="310" y="188" width="46" height="44" rx="8" fill="#199e70"/>
+    <text x="333" y="216" font-size="17" font-weight="700" fill="#ffffff" text-anchor="middle">h&#8322;</text>
+    <rect x="490" y="188" width="46" height="44" rx="8" fill="#199e70"/>
+    <text x="513" y="216" font-size="17" font-weight="700" fill="#ffffff" text-anchor="middle">h&#8323;</text>
+    <rect x="670" y="188" width="46" height="44" rx="8" fill="#199e70"/>
+    <text x="693" y="216" font-size="17" font-weight="700" fill="#ffffff" text-anchor="middle">h&#8324;</text>
+  </g>
+
+  <!-- inputs feeding up into the state -->
+  <g stroke="#898781" stroke-width="2" fill="none">
+    <line x1="153" y1="330" x2="153" y2="236"/><polygon points="153,236 147,248 159,248" fill="#898781" stroke="none"/>
+    <line x1="333" y1="330" x2="333" y2="236"/><polygon points="333,236 327,248 339,248" fill="#898781" stroke="none"/>
+    <line x1="513" y1="330" x2="513" y2="236"/><polygon points="513,236 507,248 519,248" fill="#898781" stroke="none"/>
+    <line x1="693" y1="330" x2="693" y2="236"/><polygon points="693,236 687,248 699,248" fill="#898781" stroke="none"/>
+  </g>
+  <!-- input tokens -->
+  <g>
+    <rect x="128" y="332" width="50" height="40" rx="8" fill="#f5f4ee" stroke="#c3c2b7" stroke-width="1.5"/>
+    <text x="153" y="358" font-size="16" fill="#52514e" text-anchor="middle">x&#8321;</text>
+    <rect x="308" y="332" width="50" height="40" rx="8" fill="#f5f4ee" stroke="#c3c2b7" stroke-width="1.5"/>
+    <text x="333" y="358" font-size="16" fill="#52514e" text-anchor="middle">x&#8322;</text>
+    <rect x="488" y="332" width="50" height="40" rx="8" fill="#f5f4ee" stroke="#c3c2b7" stroke-width="1.5"/>
+    <text x="513" y="358" font-size="16" fill="#52514e" text-anchor="middle">x&#8323;</text>
+    <rect x="668" y="332" width="50" height="40" rx="8" fill="#f5f4ee" stroke="#c3c2b7" stroke-width="1.5"/>
+    <text x="693" y="358" font-size="16" fill="#52514e" text-anchor="middle">x&#8324;</text>
+  </g>
+  <text x="153" y="398" font-size="14" fill="#898781" text-anchor="middle">input tokens (the sequence) &#8594;</text>
+
+  <!-- outputs coming down from the state -->
+  <g stroke="#d95926" stroke-width="2" fill="none">
+    <line x1="153" y1="140" x2="153" y2="184"/><polygon points="153,140 147,152 159,152" fill="#d95926" stroke="none" transform="rotate(180 153 146)"/>
+    <line x1="333" y1="140" x2="333" y2="184"/>
+    <line x1="513" y1="140" x2="513" y2="184"/>
+    <line x1="693" y1="140" x2="693" y2="184"/>
+  </g>
+  <g>
+    <rect x="128" y="110" width="50" height="38" rx="8" fill="#fbe9df" stroke="#d95926" stroke-width="1.5"/>
+    <text x="153" y="135" font-size="16" font-weight="700" fill="#d95926" text-anchor="middle">y&#8321;</text>
+    <rect x="308" y="110" width="50" height="38" rx="8" fill="#fbe9df" stroke="#d95926" stroke-width="1.5"/>
+    <text x="333" y="135" font-size="16" font-weight="700" fill="#d95926" text-anchor="middle">y&#8322;</text>
+    <rect x="488" y="110" width="50" height="38" rx="8" fill="#fbe9df" stroke="#d95926" stroke-width="1.5"/>
+    <text x="513" y="135" font-size="16" font-weight="700" fill="#d95926" text-anchor="middle">y&#8323;</text>
+    <rect x="668" y="110" width="50" height="38" rx="8" fill="#fbe9df" stroke="#d95926" stroke-width="1.5"/>
+    <text x="693" y="135" font-size="16" font-weight="700" fill="#d95926" text-anchor="middle">y&#8324;</text>
+  </g>
+
+  <!-- the two rules -->
+  <rect x="90" y="430" width="470" height="52" rx="10" fill="#f5f4ee" stroke="#c3c2b7" stroke-width="1.5"/>
+  <text x="110" y="454" font-size="15" fill="#0b0b0b"><tspan font-weight="700" fill="#199e70">update:</tspan>  new state = decay &#215; old state  +  new input</text>
+  <text x="110" y="474" font-size="15" fill="#0b0b0b"><tspan font-weight="700" fill="#d95926">read out:</tspan>  output = a view of the current state</text>
+
+  <!-- linear cost note -->
+  <rect x="580" y="430" width="300" height="52" rx="10" fill="#eef7f2" stroke="#199e70" stroke-width="1.5"/>
+  <text x="600" y="454" font-size="15" font-weight="700" fill="#199e70">Cost grows linearly with length</text>
+  <text x="600" y="474" font-size="14" fill="#52514e">one fixed-size state, no matter how long</text>
+</svg>

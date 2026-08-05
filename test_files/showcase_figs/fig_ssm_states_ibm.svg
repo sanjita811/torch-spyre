@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="360" viewBox="0 0 980 360" font-family="'IBM Plex Sans','IBM Plex Sans Var',system-ui,-apple-system,'Segoe UI',sans-serif">
+  <rect width="980" height="360" fill="#ffffff"/>
+
+  <!-- connectors between states -->
+  <g stroke="#8d8d8d" stroke-width="2" fill="none">
+    <line x1="248" y1="112" x2="292" y2="112"/><polygon points="292,112 280,106 280,118" fill="#8d8d8d" stroke="none"/>
+    <line x1="480" y1="112" x2="524" y2="112"/><polygon points="524,112 512,106 512,118" fill="#8d8d8d" stroke="none"/>
+    <line x1="712" y1="112" x2="756" y2="112"/><polygon points="756,112 744,106 744,118" fill="#8d8d8d" stroke="none"/>
+  </g>
+
+  <!-- state 1 (blue) -->
+  <rect x="60" y="60" width="188" height="104" rx="6" fill="#edf5ff" stroke="#0f62fe" stroke-width="2"/>
+  <text x="154" y="106" font-size="21" font-weight="600" fill="#161616" text-anchor="middle">State h&#8321;</text>
+  <text x="154" y="134" font-size="16" fill="#0f62fe" text-anchor="middle">from u&#8321;</text>
+
+  <!-- state 2 (purple) -->
+  <rect x="292" y="60" width="188" height="104" rx="6" fill="#f6f2ff" stroke="#8a3ffc" stroke-width="2"/>
+  <text x="386" y="106" font-size="21" font-weight="600" fill="#161616" text-anchor="middle">State h&#8322;</text>
+  <text x="386" y="134" font-size="16" fill="#8a3ffc" text-anchor="middle">from u&#8322;</text>
+
+  <!-- state 3 (magenta) -->
+  <rect x="524" y="60" width="188" height="104" rx="6" fill="#fff0f7" stroke="#d02670" stroke-width="2"/>
+  <text x="618" y="106" font-size="21" font-weight="600" fill="#161616" text-anchor="middle">State h&#8323;</text>
+  <text x="618" y="134" font-size="16" fill="#d02670" text-anchor="middle">from u&#8323;</text>
+
+  <!-- state 4 (teal) -->
+  <rect x="756" y="60" width="188" height="104" rx="6" fill="#e5f6f6" stroke="#007d79" stroke-width="2"/>
+  <text x="850" y="106" font-size="21" font-weight="600" fill="#161616" text-anchor="middle">State h&#8324;</text>
+  <text x="850" y="134" font-size="16" fill="#007d79" text-anchor="middle">from u&#8324;</text>
+
+  <!-- outputs y1..y4 -->
+  <g stroke="#8d8d8d" stroke-width="2" fill="none">
+    <line x1="154" y1="164" x2="154" y2="228"/>
+    <line x1="386" y1="164" x2="386" y2="228"/>
+    <line x1="618" y1="164" x2="618" y2="228"/>
+    <line x1="850" y1="164" x2="850" y2="228"/>
+  </g>
+  <g>
+    <circle cx="154" cy="252" r="24" fill="#f4f4f4" stroke="#c6c6c6" stroke-width="1.5"/>
+    <text x="154" y="258" font-size="16" fill="#525252" text-anchor="middle">y&#8321;</text>
+    <circle cx="386" cy="252" r="24" fill="#f4f4f4" stroke="#c6c6c6" stroke-width="1.5"/>
+    <text x="386" y="258" font-size="16" fill="#525252" text-anchor="middle">y&#8322;</text>
+    <circle cx="618" cy="252" r="24" fill="#f4f4f4" stroke="#c6c6c6" stroke-width="1.5"/>
+    <text x="618" y="258" font-size="16" fill="#525252" text-anchor="middle">y&#8323;</text>
+    <circle cx="850" cy="252" r="24" fill="#f4f4f4" stroke="#c6c6c6" stroke-width="1.5"/>
+    <text x="850" y="258" font-size="16" fill="#525252" text-anchor="middle">y&#8324;</text>
+  </g>
+
+  <text x="490" y="322" font-size="17" fill="#525252" text-anchor="middle">Each state carries forward everything before it &#8212; sequential, one step at a time</text>
+</svg>
