@@ -330,7 +330,6 @@ def _ensure_synthetic_origin(result, target, args: tuple) -> None:
     buf.origins = OrderedSet([fx_node])
 
 
-# TODO:This is just place holder now; Real implementation will follow
 @register_spyre_lowering(torch.ops.aten._scaled_mm.default)
 def lower_scaled_mm(
     mat1,
@@ -1439,6 +1438,7 @@ def with_int64_fallback(fn, *args, convert_output=True):
 @register_spyre_lowering(
     torch.ops.aten.add.Tensor,
     type_promotion_kind=None,
+    broadcast=True,
 )
 def lower_add(x, y, *, alpha=1):
     if alpha != 1:
@@ -1457,6 +1457,7 @@ def lower_add(x, y, *, alpha=1):
 @register_spyre_lowering(
     torch.ops.aten.mul.Tensor,
     type_promotion_kind=None,
+    broadcast=True,
 )
 def lower_mul(x, y):
     return with_int64_fallback(lowering.mul, x, y)
@@ -1465,6 +1466,7 @@ def lower_mul(x, y):
 @register_spyre_lowering(
     torch.ops.aten.sub.Tensor,
     type_promotion_kind=None,
+    broadcast=True,
 )
 def lower_sub(x, y, *, alpha=1):
     if alpha != 1:
@@ -1483,6 +1485,7 @@ def lower_sub(x, y, *, alpha=1):
 @register_spyre_lowering(
     torch.ops.aten.minimum.default,
     type_promotion_kind=None,
+    broadcast=True,
 )
 def lower_minimum(x, y):
     return with_int64_fallback(lowering.minimum, x, y)
@@ -1491,6 +1494,7 @@ def lower_minimum(x, y):
 @register_spyre_lowering(
     torch.ops.aten.maximum.default,
     type_promotion_kind=None,
+    broadcast=True,
 )
 def lower_maximum(x, y):
     return with_int64_fallback(lowering.maximum, x, y)
@@ -1505,6 +1509,32 @@ def lower_qfp8ch(x):
     """
 
     fn = lowering.ops_wrapper(torch.ops.spyre.qfp8ch.__name__)
+    x_loader = x.make_loader()
+
+    def inner_fn(index):
+        return fn(x_loader(index))
+
+    pw = Pointwise.create(
+        device=x.get_device(),
+        dtype=torch.float8_e4m3fn,
+        inner_fn=inner_fn,
+        ranges=x.get_size(),
+        origin_node=x.get_origin_node(),
+        traceback=x.get_traceback(),
+    )
+    pw.realize()
+    return pw
+
+
+@register_spyre_lowering(torch.ops.spyre.qfp8wt)
+def lower_qfp8wt(x):
+    """
+    Lower qfp8wt operation - weight FP8 format conversion.
+
+    Pointwise format conversion only (no scaling).
+    """
+
+    fn = lowering.ops_wrapper(torch.ops.spyre.qfp8wt.__name__)
     x_loader = x.make_loader()
 
     def inner_fn(index):

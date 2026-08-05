@@ -18,6 +18,7 @@ import unittest
 import torch
 import torch.nn.functional as F
 
+
 from utils_inductor import (
     ParameterizedTestMeta,
     _compile_and_run,
@@ -27,6 +28,7 @@ from utils_inductor import (
     make_param_dict,
     unique_randn_along_dim,
     shapes2key,
+    compare_with_pytorch,
 )
 import utils_inductor
 from torch_spyre._inductor.dtype_ops import DtypeOpTable
@@ -311,15 +313,32 @@ TO_DTYPE_OP_ROUND_TRIP_PARAMS_SETS = {
         cached_randn(shape, dtype=src),
         dst,
     )
-    for src, dst in [(torch.float16, torch.float32)]
+    for src in [torch.float16, torch.float32]
+    for dst in [torch.float16, torch.float32]
+    if src != dst
     for shape in TO_DTYPE_OP_SHAPES
 }
 
 TO_DTYPE_OP_ROUND_TRIP_EXPECT_FAIL = [
     f"{_dtype_name(src)}_to_{_dtype_name(dst)}_{shapes2key((shape,))}"
-    for src, dst in [(torch.float16, torch.float32)]
+    for src in [torch.float16, torch.float32]
+    for dst in [torch.float16, torch.float32]
+    if src != dst
     for shape in TO_DTYPE_OP_SHAPES_UNALIGNED
 ]
+
+TO_DTYPE_REDUCTION_DTYPES = [torch.float16, torch.float32]
+
+TO_DTYPE_REDUCTION_PARAMS_SETS = {
+    f"{_dtype_name(src)}_to_{_dtype_name(dst)}_{shapes2key((shape,))}": (
+        cached_randn(shape, dtype=src),
+        dst,
+    )
+    for src in TO_DTYPE_REDUCTION_DTYPES
+    for dst in TO_DTYPE_REDUCTION_DTYPES
+    if src != dst
+    for shape in TO_DTYPE_OP_SHAPES_ALIGNED
+}
 
 # Mixed element arrangements across a graph boundary: one operand is a native
 # fp32 (STANDARD) input, the other is fp16 upcast to fp32 in-graph (staggered
@@ -363,6 +382,34 @@ TO_DTYPE_OP_MIXED_EA_BROADCAST_PARAMS_SETS = {
         cached_randn(small, dtype=torch.float32),
     )
     for big, small in [((4, 128), (4, 1)), ((2, 4, 64), (2, 4, 1))]
+}
+
+# M x K x N -> [M, K] @ [K, N]
+_SCALED_MM_SHAPES = [
+    (128, 128, 128),
+    (1, 128, 128),
+    (2, 128, 128),
+    (3, 128, 128),
+    (4, 128, 1024),
+    (1, 4096, 4096),
+    (2, 4096, 4096),
+    (4, 4096, 4096),
+]
+
+# scale_a, scale_b
+_SCALED_MM_PARAMS = [
+    (1.0, 1.0),
+]
+
+SCALED_MM_TESTS = {
+    f"{shapes2key([shape])}_{sa}_{sb}": (
+        torch.rand((shape[0], shape[1]), dtype=torch.float16),
+        torch.rand((shape[1], shape[2]), dtype=torch.float16),
+        torch.tensor(sa, dtype=torch.float16),
+        torch.tensor(sb, dtype=torch.float16),
+    )
+    for shape in _SCALED_MM_SHAPES
+    for sa, sb in _SCALED_MM_PARAMS
 }
 
 FP32_EPS = torch.finfo(torch.float32).eps  # 1.1920928955078125e-07
@@ -634,6 +681,8 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
                     ((67, 256),) * 2,
                     ((67, 71, 256),) * 2,
                     ((7, 12, 32, 64),) * 2,
+                    # broadcasting case
+                    ((2880,), (1, 11, 2880)),
                 ]
             ),
         },
@@ -4391,6 +4440,10 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             "param_sets": TO_DTYPE_OP_ROUND_TRIP_PARAMS_SETS,
             "expect_fail": TO_DTYPE_OP_ROUND_TRIP_EXPECT_FAIL,
         },
+        ("test_round_trip_to_dtype_copy", "test_round_trip_to_dtype_copy_cpu"): {
+            "param_sets": TO_DTYPE_OP_ROUND_TRIP_PARAMS_SETS,
+            "expect_fail": TO_DTYPE_OP_ROUND_TRIP_EXPECT_FAIL,
+        },
         (
             "test_round_trip_to_dtype_implicit",
             "test_round_trip_to_dtype_implicit_cpu",
@@ -4398,6 +4451,13 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             "ops_dict": {"add": torch.add},
             "param_sets": TO_DTYPE_OP_ROUND_TRIP_PARAMS_SETS,
             "expect_fail": TO_DTYPE_OP_ROUND_TRIP_EXPECT_FAIL,
+        },
+        (
+            "test_reduction_with_to_dtype",
+            "test_reduction_with_to_dtype_cpu",
+        ): {
+            "ops_dict": {"sum": torch.sum},
+            "param_sets": TO_DTYPE_REDUCTION_PARAMS_SETS,
         },
         (
             "test_round_trip_to_dtype_implicit_invalid",
@@ -4631,6 +4691,9 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
                 "4d_dim0": (0, cached_randn((2, 4, 8, 64))),
                 "4d_dim3": (3, cached_randn((2, 4, 8, 64))),
             },
+        },
+        ("test_fp8_scaled_mm", "test_fp8_scaled_mm_cpu"): {
+            "param_sets": SCALED_MM_TESTS,
         },
         (
             "test_multiops_split",
@@ -6283,6 +6346,21 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             run_eager=False,
         )
 
+    def test_round_trip_to_dtype_copy_cpu(self, s, dst_dtype):
+        d = torch.zeros_like(s, dtype=dst_dtype)
+
+        def fn(d, s):
+            d.copy_(s)
+            return d.to(s.dtype)
+
+        self.compare_with_cpu(
+            fn,
+            d,
+            s,
+            cpu_compile=False,
+            run_eager=False,
+        )
+
     def test_round_trip_to_dtype_cpu(self, op, x, dst_dtype):
         def fn(op, x, dst_dtype):
             y = x.to(dst_dtype)
@@ -6311,6 +6389,19 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             op,
             x,
             y,
+            dst_dtype,
+            cpu_compile=False,
+            run_eager=False,
+        )
+
+    def test_reduction_with_to_dtype_cpu(self, op, x, dst_dtype):
+        def fn(op, x, dst_dtype):
+            return op(x, dtype=dst_dtype)
+
+        self.compare_with_cpu(
+            fn,
+            op,
+            x,
             dst_dtype,
             cpu_compile=False,
             run_eager=False,
@@ -6650,7 +6741,35 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
             run_eager=False,
         )
 
-    @pytest.mark.filterwarnings("ignore::torch_spyre.ops.fallbacks.FallbackWarning")
+    def test_fp8_scaled_mm_cpu(self, a, b, scale_a, scale_b):
+        """Test _scaled_mm with FP8 inputs."""
+
+        def spyre_fn(a, b, scale_a, scale_b):
+            q_a = torch.ops.spyre.quantize_fp8_with_scale(a, scale_a)
+            q_b = torch.ops.spyre.quantize_weight_fp8_with_scale(b, scale_b)
+            return torch.ops.aten._scaled_mm(
+                q_a, q_b, scale_a=None, scale_b=None, bias=None, out_dtype=torch.float16
+            )
+
+        def pytorch_fn(a, b, scale_a, scale_b):
+            q_a = (
+                (a / scale_a)
+                .clamp(-448.0, 448.0)
+                .to(torch.float8_e4m3fn)
+                .to(torch.float16)
+            )
+            q_b = (
+                (b / scale_b)
+                .clamp(-448.0, 448.0)
+                .to(torch.float8_e4m3fn)
+                .to(torch.float16)
+            )
+            return (q_a @ q_b) * (scale_a * scale_b)
+
+        compare_with_pytorch(
+            spyre_fn, pytorch_fn, a, b, scale_a, scale_b, atol=0.1, rtol=0.1
+        )
+
     def test_is_nonzero_cpu(self, *args):
         """Test torch.is_nonzero on Spyre tensors"""
         if len(args) == 1:
