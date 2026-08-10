@@ -18,9 +18,10 @@ except (ImportError, ModuleNotFoundError):
     from torch_spyre._inductor.propagate_named_dims import (
         declare_tensor_dim, name_tensor_dims)
 
-BH, C, NP = 64, 64, 128 * 64
-Cp = C + 1
+BH, NP = 64, 128 * 64
 K = int(sys.argv[1]) if len(sys.argv) > 1 else 32
+C = int(sys.argv[3]) if len(sys.argv) > 3 else 64
+Cp = C + 1
 nblk = C // K
 for nm, s in [("BH", BH), ("C", C), ("Cp", Cp), ("NP", NP), ("K", K)]:
     declare_tensor_dim(nm, s)

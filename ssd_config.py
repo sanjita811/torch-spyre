@@ -47,6 +47,11 @@ INTRA_FACTORED_TOTAL_LIMIT = 2.0 * (FP16_EXP_MAX - 1.0)   # ≈ 20.0 (with margi
 # tile the scan matmul, to lift this cap without a kernel-side blocked scan.
 MAX_FLAT_SCAN_CHUNKS = 64
 
+# C-block scan (fused_kernel_cblock) lifts the C≤64 flat cap; per-block read-copy still
+# grows ∝ C so keep a memory ceiling (512 chunks ≈ 0.96 GB at N=128). Block = one stick.
+MAX_CBLOCK_CHUNKS = 512
+CBLOCK_SIZE = 64
+
 # Largest L whose intra (BH,C,L,L) attn fits the per-core span limit. Measured
 # 2026-08-01: L=512 OK (T=32768/C64, Y=0.0109); L=1024 exceeds 256MB/core + HBM OOM.
 # So flat-scan ceiling = MAX_FLAT_SCAN_CHUNKS·MAX_INTRA_L = 64·512 = 32768.
@@ -103,19 +108,20 @@ def _pick_block_K(C):
 
 @dataclasses.dataclass(frozen=True)
 class SSDConfig:
-    """How to run one (B,T,H,P,N) SSD shape on Spyre. Chosen by ``pick_config``
-    (analytic) or the ``ssd_sweep.autotune`` cache (measured). ``scan_mode`` is
-    'flat' (one dense O(C²) matmul) or 'hierarchical' (two-level O(C^1.5), for
-    large C); ``intra`` is 'factored' (fast, fp16-bounded) or 'masked' (the
-    unconditionally-safe (BH,C,L,L) fallback for large per-chunk decay)."""
+    """How to run one (B,T,H,P,N) SSD shape on Spyre. ``scan_mode``: 'flat' (dense
+    O(C²), needs C≤64), 'cblock' (C-row-blocked, lifts the cap), or 'hierarchical'
+    (device-blocked). ``intra``: 'factored' (fast, fp16-bounded) or 'masked' (safe
+    fallback). ``cblock_size`` is the whole-stick scan block for 'cblock'."""
     L: int
     bh_tiles: int
-    scan_mode: str = "flat"          # 'flat' | 'hierarchical'
+    scan_mode: str = "flat"          # 'flat' | 'cblock' | 'hierarchical'
     block_K: int = 0                 # hier block size (0 = N/A)
     intra: str = "factored"          # 'factored' | 'masked'
+    cblock_size: int = CBLOCK_SIZE
 
 
-def pick_config(B, T, H, P, N, mean_abs_a=0.06, C_hier_threshold=None):
+def pick_config(B, T, H, P, N, mean_abs_a=0.06, C_hier_threshold=None,
+                cblock_scan=True):
     """Analytic policy: choose L, tiling, scan mode, and intra path for a shape.
 
     ``mean_abs_a`` estimates the mean |per-step decay| (a = dt·A); the per-chunk
@@ -123,39 +129,40 @@ def pick_config(B, T, H, P, N, mean_abs_a=0.06, C_hier_threshold=None):
     stays under INTRA_FACTORED_TOTAL_LIMIT. Defaults to 0.06 (this session's data).
     At the default T=4K shape this returns L=64/flat/factored — today's behavior.
 
-    ``scan_mode`` is 'flat' by default. The hierarchical (O(C^1.5)) scan is
-    CORRECT (CPU-validated) but currently BACKEND-BLOCKED on device (the 4D-batched
-    block matmul can't restickify), so ``C_hier_threshold=None`` disables it for the
-    device path. Growing L via ``_snap_L`` already shrinks C enough that flat is the
-    right choice within T≤64K (e.g. T=64K → L=128 → C=512, flat = 349ms, correct).
-    Pass an integer threshold only when experimenting with the hier path (CPU, or a
-    future backend that supports block matmuls).
+    ``cblock_scan`` (default True): use the C-row-blocked scan (scan_mode='cblock')
+    instead of forcing L up to keep C≤64, so L stays at the compute-optimal L* and C
+    grows. Set False to reproduce the legacy C≤64 flat-scan policy exactly.
     """
     n_bh = B * (H // P)
     L = _snap_L(_l_star(T, N, P), T)
 
-    # HARD scan-span constraint: the flat dense scan requires C = T/L ≤
-    # MAX_FLAT_SCAN_CHUNKS or it fails to compile (see the constant's note). The
-    # compute-optimal L* often violates this at long T (e.g. T=16384 → L*≈112 →
-    # L=128 → C=128 ✗). Raise L to the smallest 64-multiple that keeps C ≤ cap.
-    # This DOMINATES the L* preference — a slower-but-compiling L beats an OOM.
-    L_scan_min = ((T // MAX_FLAT_SCAN_CHUNKS) + 63) // 64 * 64      # smallest L s.t. C≤cap
-    if L < L_scan_min:
+    # Smallest 64-multiple L that keeps C = T/L ≤ cap (flat dense scan requirement).
+    L_scan_min = ((T // MAX_FLAT_SCAN_CHUNKS) + 63) // 64 * 64
+    C_star = T // L
+    use_cblock = (cblock_scan and MAX_FLAT_SCAN_CHUNKS < C_star <= MAX_CBLOCK_CHUNKS
+                  and C_star % CBLOCK_SIZE == 0)
+    if not use_cblock and L < L_scan_min:
+        # Legacy / out-of-envelope: force L up so the flat dense scan compiles.
         L = L_scan_min if T % L_scan_min == 0 else _snap_L(float(L_scan_min), T)
 
-    # fp16 guard: the factored intra path peaks at exp(|total|/2)≈exp(mean·L/2) and
-    # overflows past INTRA_FACTORED_TOTAL_LIMIT. Below the scan-imposed L we could
-    # cap L for safety; but when the scan constraint FORCES a large L we can't lower
-    # it, so switch to the unconditionally-safe masked intra path instead.
+    # fp16 guard on the factored intra path (peaks at exp(mean·L/2)); if a forced-large
+    # L can't be lowered legally, fall back to the unconditionally-safe masked path.
     intra = "factored"
     limit_L = int(INTRA_FACTORED_TOTAL_LIMIT / max(mean_abs_a, 1e-6))
     if L > limit_L:
         capped = _snap_L(float(limit_L), T)
-        if capped >= L_scan_min and mean_abs_a * capped < INTRA_FACTORED_TOTAL_LIMIT:
-            L = capped                      # lowering L stays scan-legal → keep factored
+        floor_L = 64 if use_cblock else L_scan_min
+        if capped >= floor_L and mean_abs_a * capped < INTRA_FACTORED_TOTAL_LIMIT:
+            L = capped
         else:
-            intra = "masked"                # forced large L (scan) → bounded masked path
+            intra = "masked"
     C = T // L
+
+    if (cblock_scan and MAX_FLAT_SCAN_CHUNKS < C <= MAX_CBLOCK_CHUNKS
+            and C % CBLOCK_SIZE == 0):
+        return SSDConfig(L=L, bh_tiles=_bh_tiles_for(n_bh, L),
+                         scan_mode="cblock", block_K=0, intra=intra,
+                         cblock_size=CBLOCK_SIZE)
 
     # Hierarchical (sub-quadratic) scan: needed only when NO single L satisfies both
     # constraints at once — i.e. keeping C≤cap needs an L so large the intra L×L attn
