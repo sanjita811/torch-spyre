@@ -110,13 +110,13 @@ def _pick_block_K(C):
 class SSDConfig:
     """How to run one (B,T,H,P,N) SSD shape on Spyre. ``scan_mode``: 'flat' (dense
     O(C²), needs C≤64), 'cblock' (C-row-blocked, lifts the cap), or 'hierarchical'
-    (device-blocked). ``intra``: 'factored' (fast, fp16-bounded) or 'masked' (safe
-    fallback). ``cblock_size`` is the whole-stick scan block for 'cblock'."""
+    (device-blocked). ``cblock_size`` is the whole-stick scan block for 'cblock'.
+    (The factored-vs-masked intra choice is NOT a config field — ssd_spyre decides it at
+    runtime from the data via _intra_decay_factored_safe.)"""
     L: int
     bh_tiles: int
     scan_mode: str = "flat"          # 'flat' | 'cblock' | 'hierarchical'
     block_K: int = 0                 # hier block size (0 = N/A)
-    intra: str = "factored"          # 'factored' | 'masked'
     cblock_size: int = CBLOCK_SIZE
 
 
@@ -145,24 +145,21 @@ def pick_config(B, T, H, P, N, mean_abs_a=0.06, C_hier_threshold=None,
         # Legacy / out-of-envelope: force L up so the flat dense scan compiles.
         L = L_scan_min if T % L_scan_min == 0 else _snap_L(float(L_scan_min), T)
 
-    # fp16 guard on the factored intra path (peaks at exp(mean·L/2)); if a forced-large
-    # L can't be lowered legally, fall back to the unconditionally-safe masked path.
-    intra = "factored"
+    # fp16 guard: prefer an L that keeps the factored intra in range (peaks at
+    # exp(mean·L/2)); lower L toward it when that stays scan-legal. (ssd_spyre still makes
+    # the final factored-vs-masked call at runtime from the actual data.)
     limit_L = int(INTRA_FACTORED_TOTAL_LIMIT / max(mean_abs_a, 1e-6))
     if L > limit_L:
         capped = _snap_L(float(limit_L), T)
         floor_L = 64 if use_cblock else L_scan_min
         if capped >= floor_L and mean_abs_a * capped < INTRA_FACTORED_TOTAL_LIMIT:
             L = capped
-        else:
-            intra = "masked"
     C = T // L
 
     if (cblock_scan and MAX_FLAT_SCAN_CHUNKS < C <= MAX_CBLOCK_CHUNKS
             and C % CBLOCK_SIZE == 0):
         return SSDConfig(L=L, bh_tiles=_bh_tiles_for(n_bh, L),
-                         scan_mode="cblock", block_K=0, intra=intra,
-                         cblock_size=CBLOCK_SIZE)
+                         scan_mode="cblock", block_K=0, cblock_size=CBLOCK_SIZE)
 
     # Hierarchical (sub-quadratic) scan: needed only when NO single L satisfies both
     # constraints at once — i.e. keeping C≤cap needs an L so large the intra L×L attn
@@ -186,4 +183,4 @@ def pick_config(B, T, H, P, N, mean_abs_a=0.06, C_hier_threshold=None,
     if scan_mode == "hierarchical" and block_K == 0:
         scan_mode = "flat"
     return SSDConfig(L=L, bh_tiles=_bh_tiles_for(n_bh, L),
-                     scan_mode=scan_mode, block_K=block_K, intra=intra)
+                     scan_mode=scan_mode, block_K=block_K)
