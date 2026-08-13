@@ -57,6 +57,7 @@ from torch._inductor.test_case import TestCase as InductorTestCase, fresh_cache
 from torch._inductor.utils import run_and_get_code
 
 from torch_spyre._inductor import config
+from torch_spyre._inductor import customops
 from torch_spyre._inductor import spyre_hint
 import torch_spyre._inductor.wsr.propagate_named_dims as _pnd
 
@@ -6660,6 +6661,123 @@ def test_zeros_named_dims_hint_correctness():
     # s_named is expected to fail — zeros with explicit named_dims hint is broken
     torch.testing.assert_close(got_named.cpu(), ref_named, atol=0.5, rtol=0.1)
     torch.testing.assert_close(got_likecval.cpu(), ref_likecval, atol=0.5, rtol=0.1)
+
+
+# ---------------------------------------------------------------------------
+# Group 11: Mamba-2 SSD kernels
+# ---------------------------------------------------------------------------
+# Structural + Spyre-vs-CPU self-consistency for the fused SSD device kernels
+# in customops (the _ssd_* kernels). This is the codegen/tiling check (BH tile +
+# C scan work-div);
+
+
+def _ssd_cblock_inputs(BH, C, L, N, P):
+    """Bounded, structured TensorSpec inputs for the factored cblock kernel."""
+    torch.manual_seed(0x55D)
+    tri = torch.tril(torch.ones(C, C), -1)
+    return [
+        tensor(
+            "a", shape=(BH, C, L), dims=["BH", "C", "Lk"],
+            value=(-(torch.rand(BH, C, L) * 0.05)).half(),
+        ),
+        tensor(
+            "cumsum_tri", shape=(L, L), dims=["Lk", "L"],
+            value=torch.triu(torch.ones(L, L)).half(),
+        ),
+        tensor(
+            "c_proj", shape=(BH, C, L, N), dims=["BH", "C", "L", "N"],
+            value=(torch.randn(BH, C, L, N) * 0.1).half(),
+        ),
+        tensor(
+            "b_proj", shape=(BH, C, L, N), dims=["BH", "C", "La", "N"],
+            value=(torch.randn(BH, C, L, N) * 0.1).half(),
+        ),
+        tensor(
+            "causal_mask", shape=(L, L), dims=["L", "La"],
+            value=torch.tril(torch.ones(L, L)).half(),
+        ),
+        tensor(
+            "x", shape=(BH, C, L, P), dims=["BH", "C", "La", "P"],
+            value=(torch.randn(BH, C, L, P) * 0.1).half(),
+        ),
+        tensor(
+            "decay_run", shape=(BH, C, C), dims=["BH", "C", "Ca"],
+            value=(torch.rand(BH, C, C) * tri).half(),
+        ),
+        tensor(
+            "decay_final", shape=(BH, 1, C), dims=["BH", "One", "Ca"],
+            value=torch.rand(BH, 1, C).half(),
+        ),
+    ]
+
+
+def _ssd_masked_inputs(BH, C, L, N, P):
+    """Bounded, structured TensorSpec inputs for the masked fallback kernel."""
+    torch.manual_seed(0x55E)
+    causal = torch.tril(torch.ones(L, L))
+    dm = torch.zeros(C + 1, C)
+    dm[:C] = torch.rand(C, C) * torch.tril(torch.ones(C, C), -1)
+    dm[C] = torch.rand(C)
+    return [
+        tensor(
+            "a", shape=(BH, C, L), dims=["BH", "C", "Lk"],
+            value=(-(torch.rand(BH, C, L) * 0.05)).half(),
+        ),
+        tensor(
+            "cumsum_tri", shape=(L, L), dims=["Lk", "L"],
+            value=torch.triu(torch.ones(L, L)).half(),
+        ),
+        tensor(
+            "c_proj", shape=(BH, C, L, N), dims=["BH", "C", "L", "N"],
+            value=(torch.randn(BH, C, L, N) * 0.1).half(),
+        ),
+        tensor(
+            "b_proj", shape=(BH, C, L, N), dims=["BH", "C", "La", "N"],
+            value=(torch.randn(BH, C, L, N) * 0.1).half(),
+        ),
+        tensor(
+            "decay_intra", shape=(BH, C, L, L), dims=["BH", "C", "L", "La"],
+            value=(torch.rand(BH, C, L, L) * causal).half(),
+        ),
+        tensor(
+            "x", shape=(BH, C, L, P), dims=["BH", "C", "La", "P"],
+            value=(torch.randn(BH, C, L, P) * 0.1).half(),
+        ),
+        tensor(
+            "decay_matrix", shape=(BH, C + 1, C), dims=["BH", "Cp", "Ca"],
+            value=dm.unsqueeze(0).expand(BH, C + 1, C).contiguous().half(),
+        ),
+    ]
+
+
+def test_ssd_cblock_BH32_C128():
+    """Factored SSD kernel: BH÷32 tile + C scan work-div (C=128 → 2 blocks)."""
+    run_coarse_tile_test(
+        lambda a, cumsum_tri, c_proj, b_proj, causal_mask, x, decay_run,
+        decay_final: customops._ssd_fused_cblock(
+            a, cumsum_tri, c_proj, b_proj, causal_mask, x, decay_run, decay_final
+        ),
+        _ssd_cblock_inputs(BH=32, C=128, L=64, N=64, P=64),
+        loopspec=LoopSpecCheck(),
+        correctness=True,
+        atol=0.5,
+        rtol=0.1,
+    )
+
+
+def test_ssd_masked_BH32_C64():
+    """Masked SSD fallback kernel: BH÷32 tile, dense (C≤64) scan."""
+    run_coarse_tile_test(
+        lambda a, cumsum_tri, c_proj, b_proj, decay_intra, x,
+        decay_matrix: customops._ssd_fused_masked(
+            a, cumsum_tri, c_proj, b_proj, decay_intra, x, decay_matrix
+        ),
+        _ssd_masked_inputs(BH=32, C=64, L=64, N=64, P=64),
+        loopspec=LoopSpecCheck(),
+        correctness=True,
+        atol=0.5,
+        rtol=0.1,
+    )
 
 
 if __name__ == "__main__":
