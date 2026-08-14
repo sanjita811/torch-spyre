@@ -20,8 +20,10 @@ matrix, routes factored-vs-masked, and stitches the compiled kernels
 together. 
 """
 
+import pytest
 import torch
 import torch.nn.functional as F
+from einops import rearrange, repeat
 
 from torch_spyre._inductor import customops
 from torch_spyre._inductor.wsr.propagate_named_dims import (
@@ -254,32 +256,106 @@ def _build_inputs(seq_len, chunk_len, seed=42):
     return xd_c, a_c, b_c, c_c
 
 
-def test_ssd_driver_factored():
-    """Factored (fp16-safe) path: the driver compiles and runs the device
-    kernels and returns well-formed (Y, final_state)."""
-    seq_len, chunk_len = 4096, 64
+# ========================= Reference + metric ==========================
+def segsum(x):
+    """Stable segment sum (verbatim, Mamba ssd_minimal.py)."""
+    T = x.size(-1)
+    x = repeat(x, "... d -> ... d e", e=T)
+    mask = torch.tril(torch.ones(T, T, device=x.device, dtype=bool), diagonal=-1)
+    x = x.masked_fill(~mask, 0)
+    x_segsum = torch.cumsum(x, dim=-2)
+    mask = torch.tril(torch.ones(T, T, device=x.device, dtype=bool), diagonal=0)
+    x_segsum = x_segsum.masked_fill(~mask, -torch.inf)
+    return x_segsum
+
+
+def ssd_reference(X, A, B, C, block_len, initial_states=None):
+    """Reference SSD = ssd_minimal_discrete (verbatim, state-spaces/mamba)."""
+    assert X.dtype == A.dtype == B.dtype == C.dtype
+    assert X.shape[1] % block_len == 0
+
+    X, A, B, C = (
+        rearrange(t, "b (c l) ... -> b c l ...", l=block_len) for t in (X, A, B, C)
+    )
+    A = rearrange(A, "b c l h -> b h c l")
+    A_cumsum = torch.cumsum(A, dim=-1)
+
+    L = torch.exp(segsum(A))
+    Y_diag = torch.einsum("bclhn,bcshn,bhcls,bcshp->bclhp", C, B, L, X)
+
+    decay_states = torch.exp(A_cumsum[:, :, :, -1:] - A_cumsum)
+    states = torch.einsum("bclhn,bhcl,bclhp->bchpn", B, decay_states, X)
+
+    if initial_states is None:
+        initial_states = torch.zeros_like(states[:, :1])
+    states = torch.cat([initial_states, states], dim=1)
+    decay_chunk = torch.exp(segsum(F.pad(A_cumsum[:, :, :, -1], (1, 0))))
+    new_states = torch.einsum("bhzc,bchpn->bzhpn", decay_chunk, states)
+    states, final_state = new_states[:, :-1], new_states[:, -1]
+
+    state_decay_out = torch.exp(A_cumsum)
+    Y_off = torch.einsum("bclhn,bchpn,bhcl->bclhp", C, states, state_decay_out)
+
+    Y = rearrange(Y_diag + Y_off, "b c l h p -> b (c l) h p")
+    return Y, final_state
+
+
+def _ssd_reference_from_chunked(xd_c, a_c, b_c, c_c, chunk_len):
+    """Run the verbatim reference on the same inputs, un-chunked to (B,T,H,*) fp32."""
+    b, h, nc, cl, p = xd_c.shape
+    t = nc * cl
+    x_m = xd_c.permute(0, 2, 3, 1, 4).reshape(b, t, h, p).float()
+    a_m = a_c.permute(0, 2, 3, 1).reshape(b, t, h).float()
+    b_m = b_c.permute(0, 2, 3, 1, 4).reshape(b, t, h, -1).float()
+    c_m = c_c.permute(0, 2, 3, 1, 4).reshape(b, t, h, -1).float()
+    return ssd_reference(x_m, a_m, b_m, c_m, chunk_len)
+
+
+def rel_l2(got, ref):
+    """Relative L2 (norm-based) error — the acceptance metric for this kernel."""
+    got, ref = got.float(), ref.float()
+    return (got - ref).norm().item() / (ref.norm().item() + 1e-12)
+
+
+# fp16 device vs fp32 reference floors around 4e-3; gate with a wide margin.
+_SSD_REL_L2_GATE = 0.05
+
+# Per-T chunk size from the L-sweep: L=64 up to 8192, 128 beyond (bh tiling is
+# the customops kernel default). The factored path handles every T; the masked
+# fp16 fallback runs only where C = T/L <= 64, so it covers just the small T.
+_FACTORED_SEQ_LENS = [2048, 4096, 8192, 16384, 32768, 65536]
+_MASKED_SEQ_LENS = [2048, 4096]
+
+
+def _chunk_len_for(seq_len):
+    return 64 if seq_len <= 8192 else 128
+
+
+@pytest.mark.parametrize("seq_len", _FACTORED_SEQ_LENS)
+def test_ssd_driver_factored(seq_len):
+    """Factored (fp16-safe) path matches the verbatim Mamba-2 reference."""
+    chunk_len = _chunk_len_for(seq_len)
     xd_c, a_c, b_c, c_c = _build_inputs(seq_len, chunk_len)
 
     y_spyre, final_spyre = _ssd_spyre(xd_c, a_c, b_c, c_c)
+    y_ref, final_ref = _ssd_reference_from_chunked(xd_c, a_c, b_c, c_c, chunk_len)
 
     assert y_spyre.shape == (_B, seq_len, _NHEADS, _P)
-    assert final_spyre.shape == (_B, _NHEADS, _P, _N)
-    assert y_spyre.dtype == torch.float16
-    assert final_spyre.dtype == torch.float16
-    assert torch.isfinite(y_spyre).all()
-    assert torch.isfinite(final_spyre).all()
+    assert rel_l2(y_spyre, y_ref) < _SSD_REL_L2_GATE
+    assert rel_l2(final_spyre, final_ref) < _SSD_REL_L2_GATE
 
 
-def test_ssd_driver_masked():
-    """Masked fallback path (forced via factored_limit=0.0), valid at C<=64: the
-    driver compiles and runs and returns well-formed (Y, final_state)."""
-    seq_len, chunk_len = 4096, 64
+@pytest.mark.parametrize("seq_len", _MASKED_SEQ_LENS)
+def test_ssd_driver_masked(seq_len):
+    """Masked fallback (forced via factored_limit=0.0), valid at C<=64, matches
+    the verbatim Mamba-2 reference."""
+    chunk_len = _chunk_len_for(seq_len)
     assert seq_len // chunk_len <= _SSD_MAX_FLAT_SCAN_CHUNKS
     xd_c, a_c, b_c, c_c = _build_inputs(seq_len, chunk_len)
 
     y_masked, final_masked = _ssd_spyre(xd_c, a_c, b_c, c_c, factored_limit=0.0)
+    y_ref, final_ref = _ssd_reference_from_chunked(xd_c, a_c, b_c, c_c, chunk_len)
 
     assert y_masked.shape == (_B, seq_len, _NHEADS, _P)
-    assert final_masked.shape == (_B, _NHEADS, _P, _N)
-    assert torch.isfinite(y_masked).all()
-    assert torch.isfinite(final_masked).all()
+    assert rel_l2(y_masked, y_ref) < _SSD_REL_L2_GATE
+    assert rel_l2(final_masked, final_ref) < _SSD_REL_L2_GATE

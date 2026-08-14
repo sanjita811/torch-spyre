@@ -958,7 +958,7 @@ def _ssd_build_intra_decay(g_row, g_col, causal_mask):
 
 def _ssd_fused_cblock(a, cumsum_tri, c_proj, b_proj, causal_mask, x,
                       decay_run, decay_final, init_state=None, init_col=None,
-                      bh_tiles=32, cblock=64):
+                      bh_tiles=4, cblock=64):
     """Factored intra + C-block inter-chunk scan + off-diagonal combine.
 
     bh_tiles: spyre_hint batch-tile count for B*nheads.
@@ -998,7 +998,7 @@ def _ssd_fused_cblock(a, cumsum_tri, c_proj, b_proj, causal_mask, x,
 
 
 def _ssd_fused_masked(a, cumsum_tri, c_proj, b_proj, decay_intra, x, decay_matrix,
-                      init_state=None, init_col=None, bh_tiles=32):
+                      init_state=None, init_col=None, bh_tiles=4):
     """fp16-overflow fallback: dense (BH,C,L,L) intra mask + dense (BH,C+1,C) scan.
 
     bh_tiles: spyre_hint batch-tile count for B*nheads.

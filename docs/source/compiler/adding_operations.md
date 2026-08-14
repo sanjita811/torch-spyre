@@ -147,18 +147,6 @@ rewrite rather than setting `origins` by hand. Some legacy passes still copy
 `origins` directly; this is migration guidance, not a claim that every existing
 site has already been converted.
 
-## Composite `spyre_hint`-driven kernels
-
-Some kernels are not a single ATen op, decomposition, or lowering, but a
-multi-stage graph steered by explicit `spyre_hint` tiling and `work_div`
-annotations plus a host-side driver. The Mamba-2 SSD kernel is the worked
-example: its device kernels live in
-[customops.py](https://github.com/torch-spyre/torch-spyre/blob/main/torch_spyre/_inductor/customops.py)
-(`_ssd_*`) and are driven from `tests/inductor/test_ssd.py` rather than
-registered as a dispatchable op. See [Mamba-2 SSD Kernel](ssd_kernel.md) for the
-full design and backend history — it is a useful reference for the `work_div`
-core-split, factored-decay, `* 1.0` read-copy, and explicit named-dim patterns.
-
 + `replace_computed_buffer_body(op, new_data, operations, pass_name=...)` in
   [pass_utils.py](https://github.com/torch-spyre/torch-spyre/blob/main/torch_spyre/_inductor/pass_utils.py)
   when reconstructing a buffer's body. It forwards `operation_name`, provenance,

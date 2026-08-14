@@ -44,7 +44,6 @@ logger = get_inductor_logger("sdsc_compile")
 # (dxp_standalone on the SDSC path, dbo-opt on the KTIR path) so the two behave
 # alike. It bounds a wedged compiler -- which would otherwise block
 # torch.compile forever with no diagnostic -- rather than policing slowness:
-# both finish in well under a second on a small kernel.
 _COMPILE_TIMEOUT_S = 60.0
 
 
